@@ -11,6 +11,7 @@ import re
 import nltk
 from nltk.corpus import wordnet
 
+# NOTE: need a better way to handle this download...
 nltk.download("wordnet")
 
 random.seed(1)
@@ -304,7 +305,7 @@ def add_word(new_words):
 def eda(sentence, alpha_sr=0.1, alpha_ri=0.1, alpha_rs=0.1, p_rd=0.1, num_aug=9):
     sentence = get_only_chars(sentence)
     words = sentence.split(" ")
-    words = [word for word in words if word is not ""]
+    words = [word for word in words if word != ""]
     num_words = len(words)
 
     augmented_sentences = []

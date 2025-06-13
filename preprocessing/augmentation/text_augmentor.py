@@ -2,7 +2,7 @@ import random
 import logging
 from typing import List, Dict, Any
 from abc import ABC, abstractmethod
-from eda import eda
+from .eda import eda
 
 logger = logging.getLogger(__name__)
 

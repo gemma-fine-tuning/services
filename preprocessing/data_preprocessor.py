@@ -4,7 +4,7 @@ import logging
 from typing import List, Dict, Any
 from datasets import Dataset
 from schema import ProcessingResult
-from preprocessing.augmentation.text_augmentor import create_augmentation_pipeline
+from augmentation.text_augmentor import create_augmentation_pipeline
 
 logger = logging.getLogger(__name__)
 
