@@ -7,7 +7,7 @@ from typing import List, Dict, Optional
 from datasets import load_dataset
 from werkzeug.utils import secure_filename
 from storage_manager import StorageManager
-from models import DatasetUploadResponse, DatasetInfoResponse
+from schema import DatasetUploadResponse, DatasetInfoResponse
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,13 @@ class DatasetHandler:
     async def load_dataset(
         self, dataset_source: str, dataset_id: str, sample_size: Optional[int] = None
     ) -> List[Dict]:
-        """Load from upload or HuggingFace - combines existing logic"""
+        """
+        Load from upload or HuggingFace - combines existing logic
+
+        Here we choose to return List[Dict] rather than Dataset object to allow for
+        future flexibility in custom dataset formats. They are converted to Dataset
+        in preprocessing step anyways.
+        """
         try:
             if dataset_source == "upload":
                 return await self._load_uploaded_dataset(dataset_id)

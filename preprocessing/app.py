@@ -2,10 +2,10 @@ import os
 import logging
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from dataset_handler import DatasetHandler
-from preprocessing.data_preprocessor import PreprocessingEngine
+from data_preprocessor import DataPreprocessor
 from storage_manager import StorageManager
 from config import ConfigManager
-from models import (
+from schema import (
     DatasetUploadResponse,
     PreprocessingRequest,
     ProcessingResult,
@@ -24,7 +24,7 @@ storage_manager = StorageManager(
     bucket_name=os.getenv("GCS_DATA_BUCKET_NAME", "gemma-dataset-dev")
 )
 dataset_handler = DatasetHandler(storage_manager)
-preprocessing_engine = PreprocessingEngine(storage_manager)
+preprocessing_engine = DataPreprocessor(storage_manager)
 config_manager = ConfigManager()
 
 
