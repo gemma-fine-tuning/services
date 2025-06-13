@@ -3,22 +3,31 @@ import re
 import logging
 from typing import List, Dict, Any
 from datasets import Dataset
-from models import ProcessingResult
+from schema import ProcessingResult
+from preprocessing.augmentation.text_augmentor import create_augmentation_pipeline
 
 logger = logging.getLogger(__name__)
 
 
 class DataPreprocessor:
-    """Single class for all preprocessing - replaces existing DatasetProcessor"""
+    """
+    Exposes the process_dataset method to handle all dataset processing tasks.
+    Pretty much everything else is private or internal functions, do not call
+    for example augmentation directly since it requires config handling.
+    """
 
     def __init__(self, storage_manager=None):
         self.whitespace_pattern = re.compile(r"\s+")
         self.storage_manager = storage_manager
+        self.augmentation_pipeline = None
 
     async def process_dataset(
         self, dataset: List[Dict], config: Dict[str, Any]
     ) -> ProcessingResult:
-        """Process dataset with configuration - enhanced existing method"""
+        """
+        Process dataset with configuration
+        Handles EVERYTHING based on your config
+        """
         try:
             # Convert to HuggingFace Dataset
             hf_dataset = Dataset.from_list(dataset)
@@ -38,6 +47,11 @@ class DataPreprocessor:
                     lambda x: {k: self._normalize_whitespace(v) for k, v in x.items()},
                     desc="Normalizing whitespace",
                 )
+
+            # Apply data augmentation if enabled
+            augmentation_config = config.get("augmentation_config", {})
+            if augmentation_config.get("enabled", False):
+                hf_dataset = self._apply_augmentation(hf_dataset, augmentation_config)
 
             # Generate unique ID for processed dataset
             processed_id = str(uuid.uuid4())
@@ -171,9 +185,52 @@ class DataPreprocessor:
         """Data formatting - uses existing _format_conversation method"""
         pass
 
-    def augment_data(self, dataset: List[Dict], augment_config: Dict):
-        """Data augmentation - placeholder for future implementation"""
-        pass
+    def _apply_augmentation(
+        self, hf_dataset: Dataset, augmentation_config: Dict
+    ) -> Dataset:
+        """
+        Apply data augmentation to the dataset.
+        NOTE: This process can often take a while if the dataset is large.
+        For production, we cannot just let the user run this because it will block the server.
+        Running some of the LLM-based augmentations locally will take forever on huge datasets.
+        """
+        try:
+            # Initialize augmentation pipeline if not already done
+            if self.augmentation_pipeline is None:
+                lightweight = augmentation_config.get("lightweight", True)
+                self.augmentation_pipeline = create_augmentation_pipeline(
+                    lightweight=lightweight,
+                    **augmentation_config.get("pipeline_config", {}),
+                )
+
+            # Get augmentation factor
+            augmentation_factor = augmentation_config.get("augmentation_factor", 1.5)
+
+            if augmentation_factor <= 1.0:
+                logger.info("Augmentation factor <= 1.0, skipping augmentation")
+                return hf_dataset
+
+            # Convert to list for augmentation
+            dataset_list = hf_dataset.to_list()
+
+            # Apply augmentation
+            logger.info(f"Applying augmentation with factor {augmentation_factor}")
+            augmented_list = self.augmentation_pipeline.augment_dataset(
+                dataset_list, augmentation_factor=augmentation_factor
+            )
+
+            # Convert back to HuggingFace Dataset
+            augmented_dataset = Dataset.from_list(augmented_list)
+
+            logger.info(
+                f"Dataset augmented from {len(hf_dataset)} to {len(augmented_dataset)} samples"
+            )
+            return augmented_dataset
+
+        except Exception as e:
+            logger.error(f"Augmentation failed: {e}")
+            logger.warning("Continuing without augmentation")
+            return hf_dataset
 
     def validate_quality(self, original: List[Dict], processed: List[Dict]):
         """Quality validation - placeholder for future implementation"""
