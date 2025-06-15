@@ -198,10 +198,17 @@ class DataPreprocessor:
             # Initialize augmentation pipeline if not already done
             if self.augmentation_pipeline is None:
                 lightweight = augmentation_config.get("lightweight", True)
-                self.augmentation_pipeline = create_augmentation_pipeline(
-                    lightweight=lightweight,
-                    **augmentation_config.get("pipeline_config", {}),
-                )
+                if lightweight:
+                    self.augmentation_pipeline = create_augmentation_pipeline(
+                        eda=True,
+                        back_translation=False,
+                        paraphrasing=False,
+                        **augmentation_config.get("pipeline_config", {}),
+                    )
+                else:
+                    self.augmentation_pipeline = create_augmentation_pipeline(
+                        **augmentation_config.get("pipeline_config", {}),
+                    )
 
             # Get augmentation factor
             augmentation_factor = augmentation_config.get("augmentation_factor", 1.5)

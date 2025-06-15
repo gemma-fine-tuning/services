@@ -17,4 +17,5 @@ dependencies = [
     "torch>=2.0.0",
     "sentencepiece>=0.1.99",
     "nltk>=3.8",
+    "sacremoses>=0.1.1",
 ]
