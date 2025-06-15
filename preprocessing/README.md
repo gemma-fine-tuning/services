@@ -1,75 +1,56 @@
 # Preprocessing Service
 
-This service handles data preprocessing for the Gemma Fine-Tuning Platform. It provides dataset upload, preprocessing, and storage capabilities using Google Cloud Storage. Designed to run on Google Cloud Run as a service using CPU resources.
+A FastAPI-based preprocessing service for Gemma fine-tuning that handles dataset upload, validation, and preprocessing with support for both domain and task adaptation.
 
-## Features
+## Architecture
 
-- Dataset upload to Google Cloud Storage
-- Standard dataset loading from Hugging Face Hub
-- Format conversion (with templates or custom mapping)
-- Preprocessing options (e.g., removing HTML, URLs, normalizing text)
-- Train/test dataset splitting
-- Cloud storage integration
+This service follows a simplified 5-component architecture:
+
+1. **DatasetHandler** - Dataset upload, loading, and validation
+2. **PreprocessingEngine** - Text processing and formatting
+3. **StorageManager** - Google Cloud Storage operations
+4. **ConfigManager** - Configuration presets and management
+5. **QualityMetrics** - Data quality assessment
+
+## Migration from Flask
+
+This service replaces the original `preprocessing/app.py` Flask application with:
+
+- FastAPI for better async support and automatic API docs
+- Modular component design for easier maintenance
+- Enhanced error handling and logging
+- Built-in configuration presets for common use cases
 
 ## API Endpoints
 
-### Health Check
+### Core Endpoints
 
-- `GET /health` - Health check endpoint
+- `GET /health` - Health check
+- `POST /upload` - Upload dataset files
+- `POST /preprocess` - Start preprocessing job
+- `GET /dataset/{dataset_id}` - Get dataset information
+- `GET /presets` - List available configuration presets
 
-### Dataset Management
+### Supported Formats
 
-- `POST /upload` - Upload dataset files to cloud storage
-- `POST /preprocess` - Start preprocessing workflow
-- `GET /dataset/<dataset_id>` - Get processed dataset information
+- JSON, JSONL, CSV files
+- HuggingFace datasets
+- Text files
 
-## Usage Examples
+## Configuration Presets
 
-### Upload Dataset
+### Domain Adaptation
 
-```bash
-curl -X POST http://localhost:8080/upload \
-  -F "file=@my_dataset.json"
-```
+- `medical` - Medical domain with specialized terminology preservation
+- `legal` - Legal domain with citation handling
+- `financial` - Financial domain with currency normalization
 
-### Start Preprocessing (Uploaded Dataset)
+### Task Adaptation
 
-```bash
-curl -X POST http://localhost:8080/preprocess \
-  -H "Content-Type: application/json" \
-  -d '{
-    "dataset_source": "upload",
-    "dataset_id": "uuid-from-upload-response",
-    "options": {
-      "remove_html": true,
-      "remove_urls": true,
-      "to_lowercase": true,
-      "normalize_unicode": true
-    }
-  }'
-```
-
-### Start Preprocessing (Standard Dataset)
-
-```bash
-curl -X POST http://localhost:8080/preprocess \
-  -H "Content-Type: application/json" \
-  -d '{
-    "dataset_source": "standard",
-    "dataset_id": "squad",
-    "sample_size": 5000,
-    "options": {
-      "normalize_unicode": true,
-      "to_lowercase": false
-    }
-  }'
-```
-
-### Get Dataset Info
-
-```bash
-curl http://localhost:8080/dataset/processed-dataset-uuid
-```
+- `question_answering` - Q&A format with context support
+- `text_classification` - Classification with label formatting
+- `code_generation` - Code generation with structure preservation
+- `summarization` - Document summarization format
 
 ## Deployment
 
@@ -77,83 +58,79 @@ curl http://localhost:8080/dataset/processed-dataset-uuid
 
 ```bash
 pip install -r requirements.txt
-python app.py
+uvicorn app:app --reload --port 8080
 ```
 
-### Docker Build
+### Docker
 
 ```bash
 docker build -t preprocessing-service .
-docker run -p 8080:8080 preprocessing-service
+docker run -p 8080:8080 -e GCS_DATA_BUCKET_NAME=your-bucket preprocessing-service
 ```
 
-### Google Cloud Run Deployment
-
-Set the `PROJECT_ID` and `DATA_BUCKET_NAME` environment variables first!
-
-Also make sure `GOOGLE_APPLICATION_CREDENTIALS` is a path to service account JSON file (otherwise do `gcloud auth login` to use your account).
+### Cloud Run
 
 ```bash
-# Build Docker image for the correct platform (amd64/linux)
-docker build --platform linux/amd64 -t us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/preprocessing-service .
-
-# Push to Artifact Registry
-docker push us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/preprocessing-service
-
-# To build on cloud
-gcloud builds submit --tag us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/preprocessing-service .
-
-# Deploy to Cloud Run
 gcloud run deploy preprocessing-service \
-  --image us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/preprocessing-service \
+  --source . \
   --platform managed \
   --region us-central1 \
   --allow-unauthenticated \
-  --memory 2Gi \
-  --cpu 1 \
-  --timeout 3600 \
-  --set-env-vars GCS_DATA_BUCKET_NAME=$DATA_BUCKET_NAME
+  --set-env-vars GCS_DATA_BUCKET_NAME=your-bucket
 ```
 
-## Configuration Options
+## Environment Variables
 
-The preprocessing service supports the following processing options:
+- `GCS_DATA_BUCKET_NAME` - Google Cloud Storage bucket name (default: "gemma-dataset-dev")
+- `PORT` - Service port (default: 8080)
 
-We take a prompt and reformats the dataset into a converstaion format specified by your prompt, and then the tokenizer will apply the ChatML format when using the SFT Trainer.
+## Features
 
-### Format Configuration (`format_config`)
+### Current Features (Migrated from Flask)
 
-- `type`: Format type ("custom", or "default")
-- `system_message`: Custom system message for conversation format
-- `user_prompt_template`: Template for user prompts (supports {field} placeholders)
-- `include_system`: Whether to include system message in conversation
+- ✅ Dataset upload to Google Cloud Storage
+- ✅ HuggingFace dataset loading
+- ✅ Text preprocessing and normalization
+- ✅ Conversation format conversion
+- ✅ Train/test dataset splitting
+- ✅ Multiple file format support (JSON, JSONL, CSV)
 
-Field mappings:
+### New Features
 
-- `input_field`: Field name for input text (default: "input")
-- `output_field`: Field name for output text (default: "output")
-- `context_field`: Field name for context text (default: "context")
+- ✅ Configuration presets for domain/task adaptation
+- ✅ Modular component architecture
+- ✅ Enhanced error handling
+- ✅ API documentation (FastAPI auto-docs at `/docs`)
 
-### General Options
+### Planned Features (Placeholders)
 
-- `normalize_whitespace`: Normalize whitespace (default: true)
-- `train_test_split`: Split dataset into train/test sets (default: false)
-- `test_size`: Proportion of test set when splitting (default: 0.2)
+- 🔄 Advanced text cleaning pipeline
+- 🔄 Data augmentation capabilities
+- 🔄 Quality metrics and validation
+- 🔄 Schema auto-detection
+- 🔄 Preview functionality
 
-## Workflow
+## API Documentation
 
-1. **Upload Dataset**: User uploads dataset file via `/upload` endpoint
-2. **Configure Preprocessing**: Frontend sends preprocessing configuration
-3. **Process Dataset**: Service downloads/loads dataset, applies preprocessing, saves to GCS
-4. **Validation**: Service validates processed dataset and returns metrics
-5. **Storage**: Processed dataset is stored in GCS for training service access
+Once running, visit `http://localhost:8080/docs` for interactive API documentation.
 
-## TODO
+## Migration Notes
 
-- Once we have the account and dashboard things setup, the user shoudl be able to reuse one of the existing datasets either from the preprocess or upload stage!
+This service maintains backward compatibility with the original Flask API while adding new capabilities. Key improvements:
 
-- Maybe we don't save both the raw and preprocessed dataset just the latest one?
+1. **Better Structure** - Separated concerns into focused components
+2. **Type Safety** - Pydantic models for request/response validation
+3. **Async Support** - Better performance for I/O operations
+4. **Configuration** - Built-in presets for common use cases
+5. **Extensibility** - Easy to add new preprocessing features
 
-- Also avoid doing so many health checks whenever the page reloads, in real deployment this would make the uptime for the service much longer and result in more costs.
+## Development
 
-- Validation for "default" format type to ensure required fields are present.
+To add new preprocessing features:
+
+1. Add methods to `PreprocessingEngine`
+2. Update configuration presets in `config.py`
+3. Add new API endpoints in `app.py`
+4. Update Pydantic models in `models.py`
+
+The modular design makes it easy to extend functionality while maintaining clean separation of concerns.
