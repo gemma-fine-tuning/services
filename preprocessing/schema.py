@@ -9,11 +9,31 @@ class DatasetUploadResponse(BaseModel):
     size_bytes: int
 
 
+class DatasetAnalysisResponse(BaseModel):
+    dataset_id: str
+    total_samples: int
+    columns: List[str]
+    sample_data: List[Dict[str, Any]]
+    column_info: Dict[str, Any]
+    format_type: str
+
+
+class PreprocessingConfig(BaseModel):
+    field_mappings: Dict[str, str] = {}
+    system_message: str = ""
+    include_system: bool = True
+    user_template: str = "{content}"
+    test_size: float = 0.2
+    train_test_split: bool = False
+    normalize_whitespace: bool = True
+
+
 class PreprocessingRequest(BaseModel):
-    dataset_source: str  # "upload" or "standard"
+    dataset_source: str  # "upload", "huggingface", or "demo"
+    # TODO: Can make this literal?
     dataset_id: str
     sample_size: Optional[int] = None
-    options: Dict[str, Any] = {}
+    config: PreprocessingConfig
 
 
 class ProcessingResult(BaseModel):
@@ -34,10 +54,32 @@ class DatasetInfoResponse(BaseModel):
     size: int
     created: str
     sample: List[Dict[str, Any]]
+    dataset_type: str  # "raw" or "processed"
+    # TODO: Can make this literal?
 
 
 class PreviewRequest(BaseModel):
     dataset_source: str
     dataset_id: str
     sample_size: int = 5
-    options: Dict[str, Any] = {}
+    config: PreprocessingConfig
+
+
+class PreviewResponse(BaseModel):
+    original_samples: List[Dict[str, Any]]
+    converted_samples: List[Dict[str, Any]]
+    conversion_success: bool
+    samples_converted: int
+    samples_failed: int
+
+
+class ValidationResponse(BaseModel):
+    is_valid: bool
+    errors: List[str]
+    warnings: List[str]
+    total_samples: int
+    valid_samples: int
+
+
+class DemoDatasetResponse(BaseModel):
+    datasets: Dict[str, str]
