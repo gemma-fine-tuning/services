@@ -11,8 +11,14 @@ PREPROCESSING_PRESETS = {
         },
         "formatting": {
             "type": "instruction",
-            "system_message": "You are a helpful medical assistant that provides accurate and helpful information.",
-            "field_mappings": {"question": "query", "answer": "response"},
+            "field_mappings": {
+                "system_field": {
+                    "type": "template",
+                    "value": "You are a helpful medical assistant that provides accurate and helpful information.",
+                },
+                "user_field": {"type": "column", "value": "query"},
+                "assistant_field": {"type": "column", "value": "response"},
+            },
         },
         "augmentation": {
             "enabled": True,
@@ -38,8 +44,14 @@ PREPROCESSING_PRESETS = {
         "cleaning": {"preserve_legal_terms": True, "normalize_citations": True},
         "formatting": {
             "type": "instruction",
-            "system_message": "You are a legal assistant that provides accurate legal information.",
-            "field_mappings": {"case": "input", "ruling": "output"},
+            "field_mappings": {
+                "system_field": {
+                    "type": "template",
+                    "value": "You are a legal assistant that provides accurate legal information.",
+                },
+                "user_field": {"type": "column", "value": "input"},
+                "assistant_field": {"type": "column", "value": "output"},
+            },
         },
         "augmentation": {"enabled": False},
     },
@@ -48,8 +60,14 @@ PREPROCESSING_PRESETS = {
         "cleaning": {"preserve_financial_terms": True, "normalize_currencies": True},
         "formatting": {
             "type": "instruction",
-            "system_message": "You are a financial advisor that provides helpful financial guidance.",
-            "field_mappings": {"query": "input", "advice": "output"},
+            "field_mappings": {
+                "system_field": {
+                    "type": "template",
+                    "value": "You are a financial advisor that provides helpful financial guidance.",
+                },
+                "user_field": {"type": "column", "value": "input"},
+                "assistant_field": {"type": "column", "value": "output"},
+            },
         },
         "augmentation": {"enabled": False},
     },
@@ -59,11 +77,12 @@ PREPROCESSING_PRESETS = {
         "formatting": {
             "type": "qa",
             "field_mappings": {
-                "question": "question",
-                "answer": "answer",
-                "context": "context",
+                "user_field": {
+                    "type": "template",
+                    "value": "Context: {context}\nQuestion: {question}",
+                },
+                "assistant_field": {"type": "column", "value": "answer"},
             },
-            "user_prompt_template": "Context: {context}\nQuestion: {question}",
         },
         "augmentation": {
             "enabled": True,
@@ -88,8 +107,13 @@ PREPROCESSING_PRESETS = {
         "description": "Text classification task",
         "formatting": {
             "type": "classification",
-            "field_mappings": {"text": "input", "label": "output"},
-            "user_prompt_template": "Classify the following text: {text}",
+            "field_mappings": {
+                "user_field": {
+                    "type": "template",
+                    "value": "Classify the following text: {text}",
+                },
+                "assistant_field": {"type": "column", "value": "output"},
+            },
         },
         "augmentation": {"enabled": False},
     },
@@ -98,8 +122,14 @@ PREPROCESSING_PRESETS = {
         "cleaning": {"preserve_code_structure": True, "normalize_indentation": True},
         "formatting": {
             "type": "instruction",
-            "system_message": "You are a coding assistant that helps with programming tasks.",
-            "field_mappings": {"instruction": "input", "code": "output"},
+            "field_mappings": {
+                "system_field": {
+                    "type": "template",
+                    "value": "You are a coding assistant that helps with programming tasks.",
+                },
+                "user_field": {"type": "column", "value": "input"},
+                "assistant_field": {"type": "column", "value": "output"},
+            },
         },
         "augmentation": {"enabled": False},
     },
@@ -107,8 +137,13 @@ PREPROCESSING_PRESETS = {
         "description": "Text summarization task",
         "formatting": {
             "type": "instruction",
-            "field_mappings": {"document": "input", "summary": "output"},
-            "user_prompt_template": "Summarize the following document:\n{document}",
+            "field_mappings": {
+                "user_field": {
+                    "type": "template",
+                    "value": "Summarize the following document:\n{document}",
+                },
+                "assistant_field": {"type": "column", "value": "output"},
+            },
         },
         "augmentation": {"enabled": False},
     },

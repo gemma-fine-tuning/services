@@ -106,38 +106,42 @@ class FormatConverter:
         Args:
             example (Dict): The input example to convert
             config (Dict[str, Any]): Configuration for the conversion, including:
-                - field_mappings (Dict): Maps input fields to ChatML roles
-                - system_message (Dict): Configuration for system message with:
-                    - type: "column" or "string"
-                    - value: column name or message string
-                - include_system (bool): Whether to include system message
-                - user_template (str): Template for formatting user content
+                - field_mappings (Dict): Maps input fields to ChatML roles with type and value:
+                    - type: "column" or "template"
+                    - value: column name or template string with {column} references
 
         Returns:
             Dict: The converted example in ChatML format, or None if conversion fails
         """
         try:
             field_mappings = config.get("field_mappings", {})
-            system_message_config = config.get("system_message", {})
-            include_system = config.get("include_system", True)
-            user_template = config.get("user_template", "{content}")
-
             messages = []
 
-            if include_system and system_message_config:
-                system_type = system_message_config.get("type")
-                system_value = system_message_config.get("value", "")
+            if "system_field" in field_mappings:
+                system_config = field_mappings["system_field"]
+                if system_config["type"] == "column":
+                    if system_config["value"] in example:
+                        system_message = str(example[system_config["value"]])
+                        if system_message:
+                            messages.append(
+                                {"role": "system", "content": system_message}
+                            )
+                else:  # template
+                    try:
+                        template_vars = {
+                            key: str(value) for key, value in example.items()
+                        }
+                        system_message = system_config["value"].format(**template_vars)
+                        if system_message:
+                            messages.append(
+                                {"role": "system", "content": system_message}
+                            )
+                    except (KeyError, ValueError) as e:
+                        logger.warning(
+                            f"System message template formatting failed: {e}"
+                        )
 
-                if system_type == "column" and system_value in example:
-                    system_message = str(example[system_value])
-                    if system_message:
-                        messages.append({"role": "system", "content": system_message})
-                elif system_type == "string" and system_value:
-                    messages.append({"role": "system", "content": system_value})
-
-            user_content = self._extract_content(
-                example, field_mappings, "user", user_template
-            )
+            user_content = self._extract_content(example, field_mappings, "user")
             if user_content:
                 messages.append({"role": "user", "content": user_content})
 
@@ -157,7 +161,7 @@ class FormatConverter:
             return None
 
         except Exception as e:
-            logger.warning(f"Failed to convert example: {str(e)}")
+            logger.warning(f"Failed to convert example: {e}")
             return None
 
     def _extract_content(
@@ -165,7 +169,6 @@ class FormatConverter:
         example: Dict,
         field_mappings: Dict,
         role: str,
-        template: str = "{content}",
     ) -> str:
         """
         Extract and format content for a specific role from the example.
@@ -176,33 +179,34 @@ class FormatConverter:
 
         Args:
             example (Dict): The input example
-            field_mappings (Dict): Maps roles to field names
+            field_mappings (Dict): Maps roles to field mapping configs
             role (str): The role to extract content for ('user' or 'assistant')
-            template (str): Template string for formatting content
 
         Returns:
             str: The extracted and formatted content
 
         Example:
             >>> example = {"question": "What is ML?"}
-            >>> field_mappings = {"user_field": "question"}
+            >>> field_mappings = {
+            ...     "user_field": {"type": "column", "value": "question"}
+            ... }
             >>> content = converter._extract_content(example, field_mappings, "user")
         """
-        field_name = field_mappings.get(f"{role}_field")
-
-        if not field_name or field_name not in example:
+        field_config = field_mappings.get(f"{role}_field")
+        if not field_config:
             return ""
 
-        content = example[field_name]
-
-        if role == "user" and "{" in template:
+        if field_config["type"] == "column":
+            if field_config["value"] not in example:
+                return ""
+            content = example[field_config["value"]]
+        else:  # template
             try:
                 template_vars = {key: str(value) for key, value in example.items()}
-                template_vars["content"] = str(content)
-                content = template.format(**template_vars)
+                content = field_config["value"].format(**template_vars)
             except (KeyError, ValueError) as e:
-                logger.warning(f"Template formatting failed: {e}, using raw content")
-                content = str(content)
+                logger.warning(f"Template formatting failed: {e}, using raw template")
+                content = field_config["value"]
 
         if isinstance(content, str):
             content = self.whitespace_pattern.sub(" ", content).strip()

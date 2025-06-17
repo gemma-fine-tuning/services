@@ -23,11 +23,13 @@ class SystemMessageConfig(BaseModel):
     value: str
 
 
+class FieldMappingConfig(BaseModel):
+    type: Literal["column", "template"]
+    value: str
+
+
 class PreprocessingConfig(BaseModel):
-    field_mappings: Dict[str, str] = {}
-    system_message: Optional[SystemMessageConfig] = None
-    include_system: bool = True
-    user_template: str = "{content}"
+    field_mappings: Dict[str, FieldMappingConfig] = {}
     test_size: float = 0.2
     train_test_split: bool = False
     normalize_whitespace: bool = True

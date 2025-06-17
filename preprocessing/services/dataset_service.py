@@ -186,10 +186,10 @@ class DatasetService:
             dataset_source (str): The source of the dataset
             dataset_id (str): The identifier for the dataset
             config (PreprocessingConfig): Configuration for processing, including:
-                - field_mappings: Maps input fields to ChatML roles
-                - system_message: Default system message
+                - field_mappings: Maps input fields to ChatML roles with type and value:
+                    - type: "column" or "template"
+                    - value: column name or template string with {column} references
                 - include_system: Whether to include system message
-                - user_template: Template for formatting user content
             num_samples (int): Number of samples to include in preview
 
         Returns:
@@ -205,8 +205,10 @@ class DatasetService:
 
         Example:
             >>> config = PreprocessingConfig(
-            ...     field_mappings={"user_field": "question", "assistant_field": "answer"},
-            ...     system_message="You are a helpful assistant."
+            ...     field_mappings={
+            ...         "user_field": {"type": "column", "value": "question"},
+            ...         "assistant_field": {"type": "template", "value": "Answer: {answer}"}
+            ...     }
             ... )
             >>> preview = await service.preview_processing(
             ...     "upload",
@@ -253,10 +255,10 @@ class DatasetService:
             dataset_source (str): The source of the dataset
             dataset_id (str): The identifier for the dataset
             config (PreprocessingConfig): Configuration for processing, including:
-                - field_mappings: Maps input fields to ChatML roles
-                - system_message: Default system message
+                - field_mappings: Maps input fields to ChatML roles with type and value:
+                    - type: "column" or "template"
+                    - value: column name or template string with {column} references
                 - include_system: Whether to include system message
-                - user_template: Template for formatting user content
                 - train_test_split: Whether to split into train/test sets
                 - test_size: Size of test set (if splitting)
             sample_size (Optional[int]): Number of samples to process.
@@ -280,8 +282,11 @@ class DatasetService:
 
         Example:
             >>> config = PreprocessingConfig(
-            ...     field_mappings={"user_field": "question", "assistant_field": "answer"},
-            ...     system_message="You are a helpful assistant.",
+            ...     field_mappings={
+            ...         "system_field": {"type": "template", "value": "You are a helpful assistant."},
+            ...         "user_field": {"type": "column", "value": "question"},
+            ...         "assistant_field": {"type": "template", "value": "Answer: {answer}"}
+            ...     },
             ...     train_test_split=True,
             ...     test_size=0.2
             ... )

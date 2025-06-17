@@ -86,7 +86,21 @@ async def analyze_dataset(
 
 @app.post("/preview", response_model=PreviewResponse)
 async def preview_processing(request: PreviewRequest):
-    """Preview how the dataset would look after processing"""
+    """Preview how the dataset would look after processing
+
+    The preview shows how the dataset would be converted to ChatML format using the provided configuration.
+    The configuration can include field mappings that specify either direct column mappings or template strings
+    with column references.
+
+    Example field mappings:
+    ```python
+    {
+        "system_field": {"type": "template", "value": "You are a helpful assistant."},
+        "user_field": {"type": "column", "value": "question"},
+        "assistant_field": {"type": "template", "value": "Answer: {answer}"}
+    }
+    ```
+    """
     try:
         result = await dataset_service.preview_processing(
             dataset_source=request.dataset_source,
@@ -103,7 +117,21 @@ async def preview_processing(request: PreviewRequest):
 
 @app.post("/process", response_model=ProcessingResult)
 async def process_dataset(request: PreprocessingRequest):
-    """Process a dataset into ChatML format"""
+    """Process a dataset into ChatML format
+
+    The processing converts the dataset to ChatML format using the provided configuration.
+    The configuration can include field mappings that specify either direct column mappings or template strings
+    with column references.
+
+    Example field mappings:
+    ```python
+    {
+        "system_field": {"type": "template", "value": "You are a helpful assistant."},
+        "user_field": {"type": "column", "value": "question"},
+        "assistant_field": {"type": "template", "value": "Answer: {answer}"}
+    }
+    ```
+    """
     try:
         result = await dataset_service.process_dataset(
             dataset_source=request.dataset_source,
