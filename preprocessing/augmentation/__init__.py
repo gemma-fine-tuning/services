@@ -7,39 +7,52 @@ This module provides comprehensive text augmentation capabilities including:
 - Paraphrasing
 - Conversational augmentation
 
-Usage:
+The module provides a high level interface for configuring and running augmentations:
 ```python
-from preprocessing.augmentation import TextAugmentationPipeline
+from preprocessing.augmentation import (
+    AugmentationManager,
+    AugmentationConfig,
+    run_augment_pipeline,
+)
+# Create an augmentation manager with desired configuration
+manager = AugmentationManager()
+config = AugmentationConfig(
+    enabled_methods=[AugmentationMethod.EDA, AugmentationMethod.BACK_TRANSLATION],
+    augmentation_factor=1.5,
+    lightweight_mode=True,
+)
+manager.configure(config)
+augmented_dataset, result = manager.augment_dataset(dataset)
+```
 
-# Or import specific components
-from preprocessing.augmentation.text_augmentor import (
-    create_augmentation_pipeline,
-    create_eda_only_pipeline,
+However, for most use cases, you can use the simplified pipeline interface:
+```python
+# Or use the simplified pipeline interface
+augmented_dataset, result = run_augment_pipeline(
+    dataset,
+    {
+        "use_eda": True,
+        "eda_alpha_sr": 0.1,
+        # Other settings as needed
+    }
 )
 ```
 """
 
-# Import main classes and functions to make them available at package level
-from .text_augmentor import (
-    TextAugmentationPipeline,
-    create_augmentation_pipeline,
-    create_eda_only_pipeline,
-    BaseAugmentor,
-    BackTranslationAugmentor,
-    ParaphraseAugmentor,
-    EDAugmentor,
+# Import new simplified interface
+from .augmentation_manager import (
+    AugmentationManager,
+    AugmentationConfig,
+    AugmentationMethod,
+    AugmentationResult,
+    run_augment_pipeline,
 )
 
-# Import EDA functions for direct use
-from .eda import eda
-
 __all__ = [
-    "TextAugmentationPipeline",
-    "create_augmentation_pipeline",
-    "create_eda_only_pipeline",
-    "BaseAugmentor",
-    "BackTranslationAugmentor",
-    "ParaphraseAugmentor",
-    "EDAugmentor",
-    "eda",
+    # Main interface
+    "AugmentationManager",
+    "AugmentationConfig",
+    "AugmentationMethod",
+    "AugmentationResult",
+    "run_augment_pipeline",
 ]
