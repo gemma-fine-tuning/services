@@ -15,7 +15,6 @@ from schema import (
     PreprocessingConfig,
     PreviewResponse,
     ValidationResponse,
-    DemoDatasetResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,7 +38,6 @@ class DatasetService:
     - Processing datasets to ChatML format
     - Managing processed datasets
     - Validating dataset formats
-    - Accessing demo datasets
 
     Attributes:
         storage (StorageInterface): Interface for storage operations
@@ -130,11 +128,9 @@ class DatasetService:
             dataset_source (str): The source of the dataset. Must be one of:
                 - 'upload': For user-uploaded datasets
                 - 'huggingface': For datasets from Hugging Face
-                - 'demo': For built-in demo datasets
             dataset_id (str): The identifier for the dataset:
                 - For 'upload': The file ID of the uploaded dataset
                 - For 'huggingface': The Hugging Face dataset name
-                - For 'demo': The demo dataset identifier
             sample_size (Optional[int]): The number of samples to analyze.
                 If None, analyzes the entire dataset.
 
@@ -566,29 +562,6 @@ class DatasetService:
         except Exception as e:
             logger.error(f"Error validating dataset: {str(e)}")
             raise
-
-    def get_demo_datasets(self) -> DemoDatasetResponse:
-        """
-        Get available demo datasets.
-
-        This method returns information about built-in demo datasets that can be
-        used for testing and demonstration purposes.
-
-        Returns:
-            DemoDatasetResponse: An object containing:
-                - datasets (Dict[str, str]): Dictionary mapping dataset IDs to descriptions
-
-        Example:
-            >>> demo_datasets = service.get_demo_datasets()
-            >>> print(demo_datasets.datasets)
-            {
-                'qa_demo': 'Question-Answer pairs for training Q&A models',
-                'instruction_demo': 'Instruction-following examples',
-                'conversation_demo': 'Conversational examples in ChatML format'
-            }
-        """
-        datasets = self.loader.get_available_demo_datasets()
-        return DemoDatasetResponse(datasets=datasets)
 
     def get_column_statistics(self, dataset: List[Dict], column: str) -> Dict[str, Any]:
         """

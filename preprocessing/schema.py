@@ -29,7 +29,7 @@ class PreprocessingConfig(BaseModel):
 
 
 class PreprocessingRequest(BaseModel):
-    dataset_source: str  # "upload", "huggingface", or "demo"
+    dataset_source: str  # "upload" or "huggingface"
     # TODO: Can make this literal?
     dataset_id: str
     sample_size: Optional[int] = None
@@ -79,7 +79,3 @@ class ValidationResponse(BaseModel):
     warnings: List[str]
     total_samples: int
     valid_samples: int
-
-
-class DemoDatasetResponse(BaseModel):
-    datasets: Dict[str, str]

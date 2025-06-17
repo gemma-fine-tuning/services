@@ -11,7 +11,6 @@ from schema import (
     DatasetInfoResponse,
     PreviewRequest,
     PreviewResponse,
-    DemoDatasetResponse,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -132,19 +131,6 @@ async def get_dataset_info(dataset_id: str, dataset_type: str = None):
         logger.error(f"Error getting dataset info: {str(e)}")
         raise HTTPException(
             status_code=500, detail=f"Failed to get dataset info: {str(e)}"
-        )
-
-
-@app.get("/demo-datasets", response_model=DemoDatasetResponse)
-async def list_demo_datasets():
-    """List available demo datasets"""
-    try:
-        result = dataset_service.get_demo_datasets()
-        return result
-    except Exception as e:
-        logger.error(f"Error listing demo datasets: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to list demo datasets: {str(e)}"
         )
 
 

@@ -11,12 +11,10 @@ logger = logging.getLogger(__name__)
 
 class DatasetLoader:
     """
-    A class that handles loading datasets from various sources including uploaded files,
-    Hugging Face datasets, and demo datasets.
+    A class that handles loading datasets from uploaded files and Hugging Face datasets.
 
     This class provides functionality to load datasets from different sources and formats,
     supporting various file types like CSV, JSON, JSONL, Excel, and Parquet files.
-    It also includes built-in demo datasets for testing and demonstration purposes.
 
     Attributes:
         storage (StorageInterface): An interface for storage operations, used to access
@@ -47,17 +45,14 @@ class DatasetLoader:
         This method supports loading datasets from three different sources:
         1. 'upload': Loads a user-uploaded dataset from storage
         2. 'huggingface': Loads a dataset from Hugging Face's dataset hub
-        3. 'demo': Loads a predefined demo dataset
 
         Args:
             dataset_source (str): The source of the dataset. Must be one of:
                 - 'upload': For user-uploaded datasets
                 - 'huggingface': For datasets from Hugging Face
-                - 'demo': For built-in demo datasets
             dataset_id (str): The identifier for the dataset:
                 - For 'upload': The file ID of the uploaded dataset
                 - For 'huggingface': The Hugging Face dataset name
-                - For 'demo': The demo dataset identifier
             sample_size (Optional[int]): The number of samples to load. If None, loads the entire dataset.
                 Only applicable for Hugging Face datasets.
 
@@ -77,8 +72,6 @@ class DatasetLoader:
                 return await self._load_uploaded_dataset(dataset_id)
             elif dataset_source == "huggingface":
                 return await self._load_huggingface_dataset(dataset_id, sample_size)
-            elif dataset_source == "demo":
-                return await self._load_demo_dataset(dataset_id)
             else:
                 raise ValueError(f"Invalid dataset_source: {dataset_source}")
 
@@ -153,86 +146,6 @@ class DatasetLoader:
             logger.error(f"Error loading Hugging Face dataset: {str(e)}")
             raise
 
-    # TODO: HAVEN'T TESTED THIS YET
-    async def _load_demo_dataset(self, dataset_id: str) -> List[Dict]:
-        """
-        Load a predefined demo dataset.
-
-        This method provides access to built-in demo datasets for testing and
-        demonstration purposes. Currently supports three types of demo datasets:
-        - qa_demo: Question-answer pairs
-        - instruction_demo: Instruction-following examples
-        - conversation_demo: Conversational examples in ChatML format
-
-        Args:
-            dataset_id (str): The identifier of the demo dataset to load. Must be one of:
-                - 'qa_demo': Question-answer pairs
-                - 'instruction_demo': Instruction-following examples
-                - 'conversation_demo': Conversational examples
-
-        Returns:
-            List[Dict]: A list of dictionaries containing the demo dataset samples.
-
-        Raises:
-            ValueError: If an invalid dataset_id is provided.
-
-        Example:
-            >>> dataset = await loader._load_demo_dataset("qa_demo")
-        """
-        demo_datasets = {
-            "qa_demo": [
-                {
-                    "question": "What is the capital of France?",
-                    "answer": "The capital of France is Paris.",
-                },
-                {
-                    "question": "How do you make a sandwich?",
-                    "answer": "To make a sandwich, you need bread, filling ingredients like meat or vegetables, and condiments. Layer the ingredients between two slices of bread.",
-                },
-                {
-                    "question": "What is machine learning?",
-                    "answer": "Machine learning is a subset of artificial intelligence that enables computers to learn and make decisions from data without being explicitly programmed.",
-                },
-            ],
-            "instruction_demo": [
-                {
-                    "instruction": "Write a short poem about nature.",
-                    "output": "Trees sway gently in the breeze,\nBirds sing songs among the leaves,\nNature's beauty brings us peace,\nIn this moment, worries cease.",
-                },
-                {
-                    "instruction": "Explain photosynthesis in simple terms.",
-                    "output": "Photosynthesis is how plants make their own food. They use sunlight, water, and carbon dioxide from the air to create sugar and oxygen. The green parts of plants (chlorophyll) capture the sunlight to power this process.",
-                },
-            ],
-            "conversation_demo": [
-                {
-                    "messages": [
-                        {"role": "user", "content": "Hello! How are you today?"},
-                        {
-                            "role": "assistant",
-                            "content": "Hello! I'm doing well, thank you for asking. How can I help you today?",
-                        },
-                    ]
-                },
-                {
-                    "messages": [
-                        {"role": "user", "content": "Can you help me with math?"},
-                        {
-                            "role": "assistant",
-                            "content": "Of course! I'd be happy to help you with math. What specific topic or problem would you like assistance with?",
-                        },
-                    ]
-                },
-            ],
-        }
-
-        if dataset_id not in demo_datasets:
-            raise ValueError(
-                f"Demo dataset '{dataset_id}' not found. Available: {list(demo_datasets.keys())}"
-            )
-
-        return demo_datasets[dataset_id]
-
     def _parse_file_content(self, content: str, filename: str) -> List[Dict]:
         """
         Parse file content based on its extension.
@@ -281,25 +194,3 @@ class DatasetLoader:
         except Exception as e:
             logger.error(f"Error parsing file content: {str(e)}")
             raise ValueError(f"Unable to parse file format: {filename}")
-
-    def get_available_demo_datasets(self) -> Dict[str, str]:
-        """
-        Get a dictionary of available demo datasets and their descriptions.
-
-        Returns:
-            Dict[str, str]: A dictionary mapping demo dataset IDs to their descriptions.
-
-        Example:
-            >>> datasets = loader.get_available_demo_datasets()
-            >>> print(datasets)
-            {
-                'qa_demo': 'Question-Answer pairs for training Q&A models',
-                'instruction_demo': 'Instruction-following examples',
-                'conversation_demo': 'Conversational examples in ChatML format'
-            }
-        """
-        return {
-            "qa_demo": "Question-Answer pairs for training Q&A models",
-            "instruction_demo": "Instruction-following examples",
-            "conversation_demo": "Conversational examples in ChatML format",
-        }
