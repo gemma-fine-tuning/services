@@ -4,8 +4,6 @@ from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-# TODO: THERE SHOULD BE A WAY THAT PERSON CAN SELECT A COLUMN FOR SYSTEM MESSAGE, RATHER THAN JUST GIVING A STRING
-
 
 class FormatConverter:
     """
@@ -107,29 +105,35 @@ class FormatConverter:
 
         Args:
             example (Dict): The input example to convert
-            config (Dict[str, Any]): Configuration for the conversion
+            config (Dict[str, Any]): Configuration for the conversion, including:
+                - field_mappings (Dict): Maps input fields to ChatML roles
+                - system_message (Dict): Configuration for system message with:
+                    - type: "column" or "string"
+                    - value: column name or message string
+                - include_system (bool): Whether to include system message
+                - user_template (str): Template for formatting user content
 
         Returns:
             Dict: The converted example in ChatML format, or None if conversion fails
-
-        Example:
-            >>> example = {"question": "What is ML?", "answer": "Machine Learning"}
-            >>> config = {
-            ...     "field_mappings": {"user_field": "question", "assistant_field": "answer"},
-            ...     "system_message": "You are a helpful assistant."
-            ... }
-            >>> converted = converter._convert_single_example(example, config)
         """
         try:
             field_mappings = config.get("field_mappings", {})
-            system_message = config.get("system_message", "")
+            system_message_config = config.get("system_message", {})
             include_system = config.get("include_system", True)
             user_template = config.get("user_template", "{content}")
 
             messages = []
 
-            if include_system and system_message:
-                messages.append({"role": "system", "content": system_message})
+            if include_system and system_message_config:
+                system_type = system_message_config.get("type")
+                system_value = system_message_config.get("value", "")
+
+                if system_type == "column" and system_value in example:
+                    system_message = str(example[system_value])
+                    if system_message:
+                        messages.append({"role": "system", "content": system_message})
+                elif system_type == "string" and system_value:
+                    messages.append({"role": "system", "content": system_value})
 
             user_content = self._extract_content(
                 example, field_mappings, "user", user_template

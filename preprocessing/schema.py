@@ -18,9 +18,14 @@ class DatasetAnalysisResponse(BaseModel):
     format_type: str
 
 
+class SystemMessageConfig(BaseModel):
+    type: Literal["column", "string"]
+    value: str
+
+
 class PreprocessingConfig(BaseModel):
     field_mappings: Dict[str, str] = {}
-    system_message: str = ""
+    system_message: Optional[SystemMessageConfig] = None
     include_system: bool = True
     user_template: str = "{content}"
     test_size: float = 0.2
