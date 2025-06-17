@@ -4,7 +4,7 @@ import logging
 from typing import List, Dict, Any
 from datasets import Dataset
 from schema import ProcessingResult
-from augmentation.text_augmentor import create_augmentation_pipeline
+from augmentation import run_augment_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,6 @@ class DataPreprocessor:
     def __init__(self, storage_manager=None):
         self.whitespace_pattern = re.compile(r"\s+")
         self.storage_manager = storage_manager
-        self.augmentation_pipeline = None
 
     async def process_dataset(
         self, dataset: List[Dict], config: Dict[str, Any]
@@ -189,46 +188,46 @@ class DataPreprocessor:
         self, hf_dataset: Dataset, augmentation_config: Dict
     ) -> Dataset:
         """
-        Apply data augmentation to the dataset.
+        Apply data augmentation to the dataset using the new simplified interface.
         NOTE: This process can often take a while if the dataset is large.
-        For production, we cannot just let the user run this because it will block the server.
-        Running some of the LLM-based augmentations locally will take forever on huge datasets.
+        For production, we need to run this in a background task or a separate thread to avoid blocking.
+
+        Args:
+            hf_dataset (Dataset): The HuggingFace dataset to augment.
+            augmentation_config (Dict): Configuration for the augmentation pipeline.
+
+        Returns:
+            Dataset: The augmented HuggingFace dataset.
+
+        Example for augmentation_config:
+        {
+            "use_eda": True,
+            "use_back_translation": True,
+            "use_paraphrasing": False,
+            "use_synthesis": True,
+            "gemini_api_key": "your_gemini_api_key",
+            "augmentation_factor": 1.5,
+            # The following are method-specific settings, do not recommend editing
+            "eda_alpha_sr": 0.1,
+            "paraphrase_model": "humarin/chatgpt_paraphraser_on_T5_base",
+            ... # Other settings as needed all in same depth
+        }
         """
         try:
-            # Initialize augmentation pipeline if not already done
-            if self.augmentation_pipeline is None:
-                lightweight = augmentation_config.get("lightweight", True)
-                if lightweight:
-                    self.augmentation_pipeline = create_augmentation_pipeline(
-                        eda=True,
-                        back_translation=False,
-                        paraphrasing=False,
-                        **augmentation_config.get("pipeline_config", {}),
-                    )
-                else:
-                    self.augmentation_pipeline = create_augmentation_pipeline(
-                        **augmentation_config.get("pipeline_config", {}),
-                    )
-
-            # Get augmentation factor
-            augmentation_factor = augmentation_config.get("augmentation_factor", 1.5)
-
-            if augmentation_factor <= 1.0:
-                logger.info("Augmentation factor <= 1.0, skipping augmentation")
-                return hf_dataset
-
-            # Convert to list for augmentation
-            dataset_list = hf_dataset.to_list()
-
-            # Apply augmentation
-            logger.info(f"Applying augmentation with factor {augmentation_factor}")
-            augmented_list = self.augmentation_pipeline.augment_dataset(
-                dataset_list, augmentation_factor=augmentation_factor
+            augmented_list, result = run_augment_pipeline(
+                hf_dataset.to_list(), augmentation_config
             )
 
-            # Convert back to HuggingFace Dataset
+            # Convert result back to HuggingFace Dataset
             augmented_dataset = Dataset.from_list(augmented_list)
 
+            # Log using the result object
+            if result.errors:
+                for error in result.errors:
+                    logger.warning(f"Augmentation error: {error}")
+
+            logger.info(f"Augmentation methods used: {result.methods_used}")
+            logger.info(f"Synthesis used: {result.synthesis_used}")
             logger.info(
                 f"Dataset augmented from {len(hf_dataset)} to {len(augmented_dataset)} samples"
             )
