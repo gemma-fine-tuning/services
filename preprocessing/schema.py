@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Literal
 
 
 class DatasetUploadResponse(BaseModel):
@@ -29,8 +29,7 @@ class PreprocessingConfig(BaseModel):
 
 
 class PreprocessingRequest(BaseModel):
-    dataset_source: str  # "upload" or "huggingface"
-    # TODO: Can make this literal?
+    dataset_source: Literal["upload", "huggingface"]
     dataset_id: str
     sample_size: Optional[int] = None
     config: PreprocessingConfig
@@ -54,12 +53,11 @@ class DatasetInfoResponse(BaseModel):
     size: int
     created: str
     sample: List[Dict[str, Any]]
-    dataset_type: str  # "raw" or "processed"
-    # TODO: Can make this literal?
+    dataset_type: Literal["raw", "processed"]
 
 
 class PreviewRequest(BaseModel):
-    dataset_source: str
+    dataset_source: Literal["upload", "huggingface"]
     dataset_id: str
     sample_size: int = 5
     config: PreprocessingConfig
