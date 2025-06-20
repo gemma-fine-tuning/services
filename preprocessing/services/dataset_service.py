@@ -258,7 +258,6 @@ class DatasetService:
                 - field_mappings: Maps input fields to ChatML roles with type and value:
                     - type: "column" or "template"
                     - value: column name or template string with {column} references
-                - include_system: Whether to include system message
                 - train_test_split: Whether to split into train/test sets
                 - test_size: Size of test set (if splitting)
             sample_size (Optional[int]): Number of samples to process.

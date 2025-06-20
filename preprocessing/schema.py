@@ -18,11 +18,6 @@ class DatasetAnalysisResponse(BaseModel):
     format_type: str
 
 
-class SystemMessageConfig(BaseModel):
-    type: Literal["column", "string"]
-    value: str
-
-
 class FieldMappingConfig(BaseModel):
     type: Literal["column", "template"]
     value: str

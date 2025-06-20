@@ -53,9 +53,6 @@ class FormatConverter:
             dataset (List[Dict]): The input dataset to convert
             config (Dict[str, Any]): Configuration for the conversion, including:
                 - field_mappings (Dict): Maps input fields to ChatML roles
-                - system_message (str): Default system message
-                - include_system (bool): Whether to include system message
-                - user_template (str): Template for formatting user content
 
         Returns:
             List[Dict]: List of examples in ChatML format, where each example has:
@@ -67,10 +64,12 @@ class FormatConverter:
         Example:
             >>> config = {
             ...     "field_mappings": {
-            ...         "user_field": "question",
-            ...         "assistant_field": "answer"
+            ...         "user_field": {"type": "template", "value": "User: {question}"},
+            ...         "assistant_field": {"type": "column", "value": "answer"}
+            ...         "system_field": {"type": "template", "value": "You are a helpful assistant."}
             ...     },
-            ...     "system_message": "You are a helpful assistant."
+            ...     "train_test_split": True,
+            ...     "test_size": 0.2
             ... }
             >>> chatml_data = converter.convert_to_chatml(dataset, config)
         """
