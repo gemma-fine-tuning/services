@@ -137,7 +137,6 @@ async def process_dataset(request: PreprocessingRequest):
             dataset_source=request.dataset_source,
             dataset_id=request.dataset_id,
             config=request.config,
-            sample_size=request.sample_size,
         )
         return result
 

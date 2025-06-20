@@ -23,17 +23,35 @@ class FieldMappingConfig(BaseModel):
     value: str
 
 
+class BaseSplitConfig(BaseModel):
+    type: Literal["hf_split", "manual_split", "no_split"]
+
+
+class HFSplitConfig(BaseSplitConfig):
+    type: Literal["hf_split"] = "hf_split"
+    splits: List[str]
+
+
+class ManualSplitConfig(BaseSplitConfig):
+    type: Literal["manual_split"] = "manual_split"
+    sample_size: Optional[int] = None
+    test_size: Optional[float] = None
+
+
+class NoSplitConfig(BaseSplitConfig):
+    type: Literal["no_split"] = "no_split"
+    sample_size: Optional[int] = None
+
+
 class PreprocessingConfig(BaseModel):
     field_mappings: Dict[str, FieldMappingConfig] = {}
-    test_size: float = 0.2
-    train_test_split: bool = False
     normalize_whitespace: bool = True
+    split_config: Optional[HFSplitConfig | ManualSplitConfig | NoSplitConfig] = None
 
 
 class PreprocessingRequest(BaseModel):
     dataset_source: Literal["upload", "huggingface"]
     dataset_id: str
-    sample_size: Optional[int] = None
     config: PreprocessingConfig
 
 
@@ -41,12 +59,10 @@ class ProcessingResult(BaseModel):
     processed_dataset_id: str
     original_count: int
     processed_count: int
-    train_count: Optional[int] = None
-    test_count: Optional[int] = None
-    train_gcs_path: Optional[str] = None
-    test_gcs_path: Optional[str] = None
-    gcs_path: Optional[str] = None
-    sample_comparison: Dict[str, Any]
+    splits: Dict[
+        str, Dict[str, Any]
+    ]  # split_name -> {count, gcs_path, processed_count}
+    sample_comparison: Dict[str, Any]  # Only one sample from train split
 
 
 class DatasetInfoResponse(BaseModel):

@@ -2,9 +2,15 @@ import json
 import io
 import logging
 import pandas as pd
-from typing import List, Dict, Optional
+from typing import List, Dict
 from datasets import load_dataset
 from storage.base import StorageInterface
+from schema import (
+    PreprocessingConfig,
+    ManualSplitConfig,
+    NoSplitConfig,
+    HFSplitConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +43,7 @@ class DatasetLoader:
         self.storage = storage
 
     async def load_dataset(
-        self, dataset_source: str, dataset_id: str, sample_size: Optional[int] = None
+        self, dataset_source: str, dataset_id: str, config: PreprocessingConfig
     ) -> List[Dict]:
         """
         Load a dataset from the specified source.
@@ -53,8 +59,8 @@ class DatasetLoader:
             dataset_id (str): The identifier for the dataset:
                 - For 'upload': The file ID of the uploaded dataset
                 - For 'huggingface': The Hugging Face dataset name
-            sample_size (Optional[int]): The number of samples to load. If None, loads the entire dataset.
-                Only applicable for Hugging Face datasets.
+            config (PreprocessingConfig): Configuration for processing, including:
+
 
         Returns:
             List[Dict]: A list of dictionaries containing the dataset samples.
@@ -67,11 +73,18 @@ class DatasetLoader:
         Example:
             >>> dataset = await loader.load_dataset("huggingface", "squad", sample_size=100)
         """
+        if dataset_source == "upload" and isinstance(
+            config.split_config, HFSplitConfig
+        ):
+            raise ValueError(
+                "HuggingFace split configuration (hf_split) cannot be used with uploaded datasets. Use 'manual_split' or 'no_split' instead."
+            )
+
         try:
             if dataset_source == "upload":
-                return await self._load_uploaded_dataset(dataset_id)
+                return await self._load_uploaded_dataset(dataset_id, config)
             elif dataset_source == "huggingface":
-                return await self._load_huggingface_dataset(dataset_id, sample_size)
+                return await self._load_huggingface_dataset(dataset_id, config)
             else:
                 raise ValueError(f"Invalid dataset_source: {dataset_source}")
 
@@ -79,26 +92,31 @@ class DatasetLoader:
             logger.error(f"Error loading dataset: {str(e)}")
             raise
 
-    async def _load_uploaded_dataset(self, dataset_id: str) -> List[Dict]:
+    async def _load_uploaded_dataset(
+        self, dataset_id: str, config: PreprocessingConfig
+    ) -> Dict[str, List[Dict]]:
         """
         Load a dataset that was previously uploaded by the user.
 
         This method searches for the uploaded file in storage and parses it based on its
         file extension. Supports various file formats including CSV, JSON, JSONL, Excel,
-        and Parquet files.
+        and Parquet files. The data is then processed according to the split configuration:
+        - NoSplitConfig: Returns all data as train split with optional sampling
+        - ManualSplitConfig: Samples the data and splits into train/test sets
 
         Args:
             dataset_id (str): The unique identifier of the uploaded dataset.
+            config (PreprocessingConfig): Configuration for processing, including split_config.
 
         Returns:
-            List[Dict]: A list of dictionaries containing the dataset samples.
+            Dict[str, List[Dict]]: A dictionary with split names as keys and dataset samples as values.
 
         Raises:
             FileNotFoundError: If no file is found with the given dataset_id.
             ValueError: If the file format cannot be parsed.
 
         Example:
-            >>> dataset = await loader._load_uploaded_dataset("123e4567-e89b-12d3-a456-426614174000")
+            >>> dataset = await loader._load_uploaded_dataset("123e4567-e89b-12d3-a456-426614174000", config)
         """
         print(self.storage.list_files())
         files = self.storage.list_files(prefix=f"raw_datasets/{dataset_id}_")
@@ -109,38 +127,119 @@ class DatasetLoader:
         file_content = await self.storage.download_data(file_path)
 
         filename = file_path.split("_", 1)[1]
-        return self._parse_file_content(file_content, filename)
+        data = self._parse_file_content(file_content, filename)
 
-    # TODO: HAVEN'T TESTED THIS YET
+        # No split configuration - return all data as train split
+        if isinstance(config.split_config, NoSplitConfig):
+            sample_size = config.split_config.sample_size
+            if sample_size and len(data) > sample_size:
+                # Shuffle and sample the data
+                import random
+
+                random.shuffle(data)
+                data = data[:sample_size]
+            return {"train": data}
+
+        # Manual split configuration - sample and split into train/test
+        elif isinstance(config.split_config, ManualSplitConfig):
+            sample_size = config.split_config.sample_size
+            test_size = config.split_config.test_size
+
+            if sample_size and len(data) > sample_size:
+                # Shuffle and sample the data
+                import random
+
+                random.shuffle(data)
+                data = data[:sample_size]
+
+            # If no test_size provided, return all data as train split
+            if test_size is None:
+                return {"train": data}
+
+            # Split into train/test
+            split_index = int(len(data) * (1 - test_size))
+            train_data = data[:split_index]
+            test_data = data[split_index:]
+
+            return {"train": train_data, "test": test_data}
+
+        # No split config provided - return all data as train split
+        else:
+            return {"train": data}
+
     async def _load_huggingface_dataset(
-        self, dataset_name: str, sample_size: Optional[int] = None
-    ) -> List[Dict]:
+        self, dataset_name: str, config: PreprocessingConfig
+    ) -> Dict[str, List[Dict]]:
         """
         Load a dataset from Hugging Face's dataset hub.
 
-        This method downloads and loads a dataset from Hugging Face, with optional
-        sampling functionality. The dataset is loaded in the 'train' split by default.
+        This method downloads and loads a dataset from Hugging Face based on the split_config:
+        - NoSplitConfig: Loads train split with sampling
+        - ManualSplitConfig: Loads train split, samples it, then splits into train/test
+        - HFSplitConfig: Loads all specified splits from Hugging Face
 
         Args:
             dataset_name (str): The name of the dataset on Hugging Face (e.g., 'squad', 'glue').
-            sample_size (Optional[int]): The number of samples to load. If None, loads the entire dataset.
+            config (PreprocessingConfig): Configuration for processing, including split_config.
 
         Returns:
-            List[Dict]: A list of dictionaries containing the dataset samples.
+            Dict[str, List[Dict]]: A dictionary with split names as keys and dataset samples as values.
 
         Raises:
             Exception: If there's an error loading the dataset from Hugging Face.
 
         Example:
-            >>> dataset = await loader._load_huggingface_dataset("squad", sample_size=1000)
+            >>> dataset = await loader._load_huggingface_dataset("squad", config)
         """
         try:
-            dataset = load_dataset(dataset_name, split="train")
+            # No split configuration - just get train split
+            if isinstance(config.split_config, NoSplitConfig):
+                dataset = load_dataset(dataset_name, split="train")
+                sample_size = config.split_config.sample_size
+                if sample_size and len(dataset) > sample_size:
+                    dataset = dataset.shuffle().select(range(sample_size))
+                return {"train": list(dataset)}
 
-            if sample_size and len(dataset) > sample_size:
-                dataset = dataset.shuffle().select(range(sample_size))
+            # Manual split configuration - get train split, sample it, then split into train/test
+            elif isinstance(config.split_config, ManualSplitConfig):
+                dataset = load_dataset(dataset_name, split="train")
+                sample_size = config.split_config.sample_size
+                test_size = config.split_config.test_size
 
-            return list(dataset)
+                if sample_size and len(dataset) > sample_size:
+                    dataset = dataset.shuffle().select(range(sample_size))
+
+                # Convert to list
+                dataset_list = list(dataset)
+
+                # If no test_size provided, return all data as train split
+                if test_size is None:
+                    return {"train": dataset_list}
+
+                # Split into train/test
+                split_index = int(len(dataset_list) * (1 - test_size))
+                train_data = dataset_list[:split_index]
+                test_data = dataset_list[split_index:]
+
+                return {"train": train_data, "test": test_data}
+
+            # HF split configuration - get all specified splits
+            elif isinstance(config.split_config, HFSplitConfig):
+                splits = config.split_config.splits
+                if not splits:
+                    # Default to train if no splits specified
+                    dataset = load_dataset(dataset_name, split="train")
+                    return {"train": list(dataset)}
+
+                dataset = {}
+                for split in splits:
+                    dataset[split] = list(load_dataset(dataset_name, split=split))
+                return dataset
+
+            # No split config provided - default to train split
+            else:
+                dataset = load_dataset(dataset_name, split="train")
+                return {"train": list(dataset)}
 
         except Exception as e:
             logger.error(f"Error loading Hugging Face dataset: {str(e)}")
