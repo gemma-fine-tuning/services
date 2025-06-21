@@ -2,21 +2,25 @@ import json
 import io
 import logging
 import pandas as pd
-from typing import List, Dict, Optional
+from typing import List, Dict
 from datasets import load_dataset
 from storage.base import StorageInterface
+from schema import (
+    PreprocessingConfig,
+    ManualSplitConfig,
+    NoSplitConfig,
+    HFSplitConfig,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class DatasetLoader:
     """
-    A class that handles loading datasets from various sources including uploaded files,
-    Hugging Face datasets, and demo datasets.
+    A class that handles loading datasets from uploaded files and Hugging Face datasets.
 
     This class provides functionality to load datasets from different sources and formats,
     supporting various file types like CSV, JSON, JSONL, Excel, and Parquet files.
-    It also includes built-in demo datasets for testing and demonstration purposes.
 
     Attributes:
         storage (StorageInterface): An interface for storage operations, used to access
@@ -39,7 +43,7 @@ class DatasetLoader:
         self.storage = storage
 
     async def load_dataset(
-        self, dataset_source: str, dataset_id: str, sample_size: Optional[int] = None
+        self, dataset_source: str, dataset_id: str, config: PreprocessingConfig
     ) -> List[Dict]:
         """
         Load a dataset from the specified source.
@@ -47,19 +51,16 @@ class DatasetLoader:
         This method supports loading datasets from three different sources:
         1. 'upload': Loads a user-uploaded dataset from storage
         2. 'huggingface': Loads a dataset from Hugging Face's dataset hub
-        3. 'demo': Loads a predefined demo dataset
 
         Args:
             dataset_source (str): The source of the dataset. Must be one of:
                 - 'upload': For user-uploaded datasets
                 - 'huggingface': For datasets from Hugging Face
-                - 'demo': For built-in demo datasets
             dataset_id (str): The identifier for the dataset:
                 - For 'upload': The file ID of the uploaded dataset
                 - For 'huggingface': The Hugging Face dataset name
-                - For 'demo': The demo dataset identifier
-            sample_size (Optional[int]): The number of samples to load. If None, loads the entire dataset.
-                Only applicable for Hugging Face datasets.
+            config (PreprocessingConfig): Configuration for processing, including:
+
 
         Returns:
             List[Dict]: A list of dictionaries containing the dataset samples.
@@ -72,13 +73,18 @@ class DatasetLoader:
         Example:
             >>> dataset = await loader.load_dataset("huggingface", "squad", sample_size=100)
         """
+        if dataset_source == "upload" and isinstance(
+            config.split_config, HFSplitConfig
+        ):
+            raise ValueError(
+                "HuggingFace split configuration (hf_split) cannot be used with uploaded datasets. Use 'manual_split' or 'no_split' instead."
+            )
+
         try:
             if dataset_source == "upload":
-                return await self._load_uploaded_dataset(dataset_id)
+                return await self._load_uploaded_dataset(dataset_id, config)
             elif dataset_source == "huggingface":
-                return await self._load_huggingface_dataset(dataset_id, sample_size)
-            elif dataset_source == "demo":
-                return await self._load_demo_dataset(dataset_id)
+                return await self._load_huggingface_dataset(dataset_id, config)
             else:
                 raise ValueError(f"Invalid dataset_source: {dataset_source}")
 
@@ -86,26 +92,31 @@ class DatasetLoader:
             logger.error(f"Error loading dataset: {str(e)}")
             raise
 
-    async def _load_uploaded_dataset(self, dataset_id: str) -> List[Dict]:
+    async def _load_uploaded_dataset(
+        self, dataset_id: str, config: PreprocessingConfig
+    ) -> Dict[str, List[Dict]]:
         """
         Load a dataset that was previously uploaded by the user.
 
         This method searches for the uploaded file in storage and parses it based on its
         file extension. Supports various file formats including CSV, JSON, JSONL, Excel,
-        and Parquet files.
+        and Parquet files. The data is then processed according to the split configuration:
+        - NoSplitConfig: Returns all data as train split with optional sampling
+        - ManualSplitConfig: Samples the data and splits into train/test sets
 
         Args:
             dataset_id (str): The unique identifier of the uploaded dataset.
+            config (PreprocessingConfig): Configuration for processing, including split_config.
 
         Returns:
-            List[Dict]: A list of dictionaries containing the dataset samples.
+            Dict[str, List[Dict]]: A dictionary with split names as keys and dataset samples as values.
 
         Raises:
             FileNotFoundError: If no file is found with the given dataset_id.
             ValueError: If the file format cannot be parsed.
 
         Example:
-            >>> dataset = await loader._load_uploaded_dataset("123e4567-e89b-12d3-a456-426614174000")
+            >>> dataset = await loader._load_uploaded_dataset("123e4567-e89b-12d3-a456-426614174000", config)
         """
         print(self.storage.list_files())
         files = self.storage.list_files(prefix=f"raw_datasets/{dataset_id}_")
@@ -116,122 +127,123 @@ class DatasetLoader:
         file_content = await self.storage.download_data(file_path)
 
         filename = file_path.split("_", 1)[1]
-        return self._parse_file_content(file_content, filename)
+        data = self._parse_file_content(file_content, filename)
 
-    # TODO: HAVEN'T TESTED THIS YET
+        # No split configuration - return all data as train split
+        if isinstance(config.split_config, NoSplitConfig):
+            sample_size = config.split_config.sample_size
+            if sample_size and len(data) > sample_size:
+                # Shuffle and sample the data
+                import random
+
+                random.shuffle(data)
+                data = data[:sample_size]
+            return {"train": data}
+
+        # Manual split configuration - sample and split into train/test
+        elif isinstance(config.split_config, ManualSplitConfig):
+            sample_size = config.split_config.sample_size
+            test_size = config.split_config.test_size
+
+            if sample_size and len(data) > sample_size:
+                # Shuffle and sample the data
+                import random
+
+                random.shuffle(data)
+                data = data[:sample_size]
+
+            # If no test_size provided, return all data as train split
+            if test_size is None:
+                return {"train": data}
+
+            # Split into train/test
+            split_index = int(len(data) * (1 - test_size))
+            train_data = data[:split_index]
+            test_data = data[split_index:]
+
+            return {"train": train_data, "test": test_data}
+
+        # No split config provided - return all data as train split
+        else:
+            return {"train": data}
+
     async def _load_huggingface_dataset(
-        self, dataset_name: str, sample_size: Optional[int] = None
-    ) -> List[Dict]:
+        self, dataset_name: str, config: PreprocessingConfig
+    ) -> Dict[str, List[Dict]]:
         """
         Load a dataset from Hugging Face's dataset hub.
 
-        This method downloads and loads a dataset from Hugging Face, with optional
-        sampling functionality. The dataset is loaded in the 'train' split by default.
+        This method downloads and loads a dataset from Hugging Face based on the split_config:
+        - NoSplitConfig: Loads train split with sampling
+        - ManualSplitConfig: Loads train split, samples it, then splits into train/test
+        - HFSplitConfig: Loads all specified splits from Hugging Face
 
         Args:
             dataset_name (str): The name of the dataset on Hugging Face (e.g., 'squad', 'glue').
-            sample_size (Optional[int]): The number of samples to load. If None, loads the entire dataset.
+            config (PreprocessingConfig): Configuration for processing, including split_config.
 
         Returns:
-            List[Dict]: A list of dictionaries containing the dataset samples.
+            Dict[str, List[Dict]]: A dictionary with split names as keys and dataset samples as values.
 
         Raises:
             Exception: If there's an error loading the dataset from Hugging Face.
 
         Example:
-            >>> dataset = await loader._load_huggingface_dataset("squad", sample_size=1000)
+            >>> dataset = await loader._load_huggingface_dataset("squad", config)
         """
         try:
-            dataset = load_dataset(dataset_name, split="train")
+            # No split configuration - just get train split
+            if isinstance(config.split_config, NoSplitConfig):
+                dataset = load_dataset(dataset_name, split="train")
+                sample_size = config.split_config.sample_size
+                if sample_size and len(dataset) > sample_size:
+                    dataset = dataset.shuffle().select(range(sample_size))
+                return {"train": list(dataset)}
 
-            if sample_size and len(dataset) > sample_size:
-                dataset = dataset.shuffle().select(range(sample_size))
+            # Manual split configuration - get train split, sample it, then split into train/test
+            elif isinstance(config.split_config, ManualSplitConfig):
+                dataset = load_dataset(dataset_name, split="train")
+                sample_size = config.split_config.sample_size
+                test_size = config.split_config.test_size
 
-            return list(dataset)
+                if sample_size and len(dataset) > sample_size:
+                    dataset = dataset.shuffle().select(range(sample_size))
+
+                # Convert to list
+                dataset_list = list(dataset)
+
+                # If no test_size provided, return all data as train split
+                if test_size is None:
+                    return {"train": dataset_list}
+
+                # Split into train/test
+                split_index = int(len(dataset_list) * (1 - test_size))
+                train_data = dataset_list[:split_index]
+                test_data = dataset_list[split_index:]
+
+                return {"train": train_data, "test": test_data}
+
+            # HF split configuration - get all specified splits
+            elif isinstance(config.split_config, HFSplitConfig):
+                splits = config.split_config.splits
+                if not splits:
+                    # Default to train if no splits specified
+                    dataset = load_dataset(dataset_name, split="train")
+                    return {"train": list(dataset)}
+
+                dataset = {}
+                for split in splits:
+                    dataset[split] = list(load_dataset(dataset_name, split=split))
+                return dataset
+
+            # No split config provided - default to train split
+            else:
+                dataset = load_dataset(dataset_name, split="train")
+                return {"train": list(dataset)}
 
         except Exception as e:
             logger.error(f"Error loading Hugging Face dataset: {str(e)}")
             raise
-
-    # TODO: HAVEN'T TESTED THIS YET
-    async def _load_demo_dataset(self, dataset_id: str) -> List[Dict]:
-        """
-        Load a predefined demo dataset.
-
-        This method provides access to built-in demo datasets for testing and
-        demonstration purposes. Currently supports three types of demo datasets:
-        - qa_demo: Question-answer pairs
-        - instruction_demo: Instruction-following examples
-        - conversation_demo: Conversational examples in ChatML format
-
-        Args:
-            dataset_id (str): The identifier of the demo dataset to load. Must be one of:
-                - 'qa_demo': Question-answer pairs
-                - 'instruction_demo': Instruction-following examples
-                - 'conversation_demo': Conversational examples
-
-        Returns:
-            List[Dict]: A list of dictionaries containing the demo dataset samples.
-
-        Raises:
-            ValueError: If an invalid dataset_id is provided.
-
-        Example:
-            >>> dataset = await loader._load_demo_dataset("qa_demo")
-        """
-        demo_datasets = {
-            "qa_demo": [
-                {
-                    "question": "What is the capital of France?",
-                    "answer": "The capital of France is Paris.",
-                },
-                {
-                    "question": "How do you make a sandwich?",
-                    "answer": "To make a sandwich, you need bread, filling ingredients like meat or vegetables, and condiments. Layer the ingredients between two slices of bread.",
-                },
-                {
-                    "question": "What is machine learning?",
-                    "answer": "Machine learning is a subset of artificial intelligence that enables computers to learn and make decisions from data without being explicitly programmed.",
-                },
-            ],
-            "instruction_demo": [
-                {
-                    "instruction": "Write a short poem about nature.",
-                    "output": "Trees sway gently in the breeze,\nBirds sing songs among the leaves,\nNature's beauty brings us peace,\nIn this moment, worries cease.",
-                },
-                {
-                    "instruction": "Explain photosynthesis in simple terms.",
-                    "output": "Photosynthesis is how plants make their own food. They use sunlight, water, and carbon dioxide from the air to create sugar and oxygen. The green parts of plants (chlorophyll) capture the sunlight to power this process.",
-                },
-            ],
-            "conversation_demo": [
-                {
-                    "messages": [
-                        {"role": "user", "content": "Hello! How are you today?"},
-                        {
-                            "role": "assistant",
-                            "content": "Hello! I'm doing well, thank you for asking. How can I help you today?",
-                        },
-                    ]
-                },
-                {
-                    "messages": [
-                        {"role": "user", "content": "Can you help me with math?"},
-                        {
-                            "role": "assistant",
-                            "content": "Of course! I'd be happy to help you with math. What specific topic or problem would you like assistance with?",
-                        },
-                    ]
-                },
-            ],
-        }
-
-        if dataset_id not in demo_datasets:
-            raise ValueError(
-                f"Demo dataset '{dataset_id}' not found. Available: {list(demo_datasets.keys())}"
-            )
-
-        return demo_datasets[dataset_id]
 
     def _parse_file_content(self, content: str, filename: str) -> List[Dict]:
         """
@@ -281,25 +293,3 @@ class DatasetLoader:
         except Exception as e:
             logger.error(f"Error parsing file content: {str(e)}")
             raise ValueError(f"Unable to parse file format: {filename}")
-
-    def get_available_demo_datasets(self) -> Dict[str, str]:
-        """
-        Get a dictionary of available demo datasets and their descriptions.
-
-        Returns:
-            Dict[str, str]: A dictionary mapping demo dataset IDs to their descriptions.
-
-        Example:
-            >>> datasets = loader.get_available_demo_datasets()
-            >>> print(datasets)
-            {
-                'qa_demo': 'Question-Answer pairs for training Q&A models',
-                'instruction_demo': 'Instruction-following examples',
-                'conversation_demo': 'Conversational examples in ChatML format'
-            }
-        """
-        return {
-            "qa_demo": "Question-Answer pairs for training Q&A models",
-            "instruction_demo": "Instruction-following examples",
-            "conversation_demo": "Conversational examples in ChatML format",
-        }

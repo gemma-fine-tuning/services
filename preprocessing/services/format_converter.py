@@ -4,8 +4,6 @@ from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-# TODO: THERE SHOULD BE A WAY THAT PERSON CAN SELECT A COLUMN FOR SYSTEM MESSAGE, RATHER THAN JUST GIVING A STRING
-
 
 class FormatConverter:
     """
@@ -42,25 +40,24 @@ class FormatConverter:
         self.whitespace_pattern = re.compile(r"\s+")
 
     def convert_to_chatml(
-        self, dataset: List[Dict], config: Dict[str, Any]
-    ) -> List[Dict]:
+        self, dataset: Dict[str, List[Dict]], config: Dict[str, Any]
+    ) -> Dict[str, List[Dict]]:
         """
-        Convert a dataset to ChatML format.
+        Convert a dataset with splits to ChatML format.
 
-        This method converts each example in the dataset to the ChatML format based on
+        This method converts each example in each split of the dataset to the ChatML format based on
         the provided configuration. It handles field mapping, template formatting, and
-        ensures the output follows the ChatML structure.
+        ensures the output follows the ChatML structure for all splits.
 
         Args:
-            dataset (List[Dict]): The input dataset to convert
+            dataset (Dict[str, List[Dict]]): The input dataset with splits to convert, where keys are split names
+                (e.g., 'train', 'test', 'validation') and values are lists of examples
             config (Dict[str, Any]): Configuration for the conversion, including:
                 - field_mappings (Dict): Maps input fields to ChatML roles
-                - system_message (str): Default system message
-                - include_system (bool): Whether to include system message
-                - user_template (str): Template for formatting user content
 
         Returns:
-            List[Dict]: List of examples in ChatML format, where each example has:
+            Dict[str, List[Dict]]: Dictionary with split names as keys and lists of examples in ChatML format as values,
+                where each example has:
                 - messages (List[Dict]): List of message objects with role and content
 
         Raises:
@@ -69,29 +66,53 @@ class FormatConverter:
         Example:
             >>> config = {
             ...     "field_mappings": {
-            ...         "user_field": "question",
-            ...         "assistant_field": "answer"
-            ...     },
-            ...     "system_message": "You are a helpful assistant."
+            ...         "user_field": {"type": "template", "value": "User: {question}"},
+            ...         "assistant_field": {"type": "column", "value": "answer"}
+            ...         "system_field": {"type": "template", "value": "You are a helpful assistant."}
+            ...     }
+            ... }
+            >>> dataset = {
+            ...     "train": [{"question": "What is ML?", "answer": "Machine Learning"}],
+            ...     "test": [{"question": "What is AI?", "answer": "Artificial Intelligence"}]
             ... }
             >>> chatml_data = converter.convert_to_chatml(dataset, config)
+            >>> # Returns: {
+            ... #     "train": [{"messages": [{"role": "user", "content": "User: What is ML?"}, {"role": "assistant", "content": "Machine Learning"}]}],
+            ... #     "test": [{"messages": [{"role": "user", "content": "User: What is AI?"}, {"role": "assistant", "content": "Artificial Intelligence"}]}]
+            ... # }
         """
         try:
             if not dataset:
-                return []
+                return {}
 
-            if self._is_chatml_format(dataset):
-                logger.info("Dataset is already in ChatML format")
-                return dataset
+            converted_dataset = {}
 
-            converted_dataset = []
+            for split_name, split_data in dataset.items():
+                if not split_data:
+                    converted_dataset[split_name] = []
+                    continue
 
-            for example in dataset:
-                converted_example = self._convert_single_example(example, config)
-                if converted_example:
-                    converted_dataset.append(converted_example)
+                # Check if this split is already in ChatML format
+                if self._is_chatml_format(split_data):
+                    logger.info(f"Split '{split_name}' is already in ChatML format")
+                    converted_dataset[split_name] = split_data
+                    continue
 
-            logger.info(f"Converted {len(converted_dataset)} examples to ChatML format")
+                converted_split = []
+
+                for example in split_data:
+                    converted_example = self._convert_single_example(example, config)
+                    if converted_example:
+                        converted_split.append(converted_example)
+
+                converted_dataset[split_name] = converted_split
+                logger.info(
+                    f"Converted {len(converted_split)} examples in split '{split_name}' to ChatML format"
+                )
+
+            logger.info(
+                f"Converted dataset with {len(converted_dataset)} splits to ChatML format"
+            )
             return converted_dataset
 
         except Exception as e:
@@ -107,33 +128,43 @@ class FormatConverter:
 
         Args:
             example (Dict): The input example to convert
-            config (Dict[str, Any]): Configuration for the conversion
+            config (Dict[str, Any]): Configuration for the conversion, including:
+                - field_mappings (Dict): Maps input fields to ChatML roles with type and value:
+                    - type: "column" or "template"
+                    - value: column name or template string with {column} references
 
         Returns:
             Dict: The converted example in ChatML format, or None if conversion fails
-
-        Example:
-            >>> example = {"question": "What is ML?", "answer": "Machine Learning"}
-            >>> config = {
-            ...     "field_mappings": {"user_field": "question", "assistant_field": "answer"},
-            ...     "system_message": "You are a helpful assistant."
-            ... }
-            >>> converted = converter._convert_single_example(example, config)
         """
         try:
             field_mappings = config.get("field_mappings", {})
-            system_message = config.get("system_message", "")
-            include_system = config.get("include_system", True)
-            user_template = config.get("user_template", "{content}")
-
             messages = []
 
-            if include_system and system_message:
-                messages.append({"role": "system", "content": system_message})
+            if "system_field" in field_mappings:
+                system_config = field_mappings["system_field"]
+                if system_config["type"] == "column":
+                    if system_config["value"] in example:
+                        system_message = str(example[system_config["value"]])
+                        if system_message:
+                            messages.append(
+                                {"role": "system", "content": system_message}
+                            )
+                else:  # template
+                    try:
+                        template_vars = {
+                            key: str(value) for key, value in example.items()
+                        }
+                        system_message = system_config["value"].format(**template_vars)
+                        if system_message:
+                            messages.append(
+                                {"role": "system", "content": system_message}
+                            )
+                    except (KeyError, ValueError) as e:
+                        logger.warning(
+                            f"System message template formatting failed: {e}"
+                        )
 
-            user_content = self._extract_content(
-                example, field_mappings, "user", user_template
-            )
+            user_content = self._extract_content(example, field_mappings, "user")
             if user_content:
                 messages.append({"role": "user", "content": user_content})
 
@@ -153,7 +184,7 @@ class FormatConverter:
             return None
 
         except Exception as e:
-            logger.warning(f"Failed to convert example: {str(e)}")
+            logger.warning(f"Failed to convert example: {e}")
             return None
 
     def _extract_content(
@@ -161,7 +192,6 @@ class FormatConverter:
         example: Dict,
         field_mappings: Dict,
         role: str,
-        template: str = "{content}",
     ) -> str:
         """
         Extract and format content for a specific role from the example.
@@ -172,33 +202,34 @@ class FormatConverter:
 
         Args:
             example (Dict): The input example
-            field_mappings (Dict): Maps roles to field names
+            field_mappings (Dict): Maps roles to field mapping configs
             role (str): The role to extract content for ('user' or 'assistant')
-            template (str): Template string for formatting content
 
         Returns:
             str: The extracted and formatted content
 
         Example:
             >>> example = {"question": "What is ML?"}
-            >>> field_mappings = {"user_field": "question"}
+            >>> field_mappings = {
+            ...     "user_field": {"type": "column", "value": "question"}
+            ... }
             >>> content = converter._extract_content(example, field_mappings, "user")
         """
-        field_name = field_mappings.get(f"{role}_field")
-
-        if not field_name or field_name not in example:
+        field_config = field_mappings.get(f"{role}_field")
+        if not field_config:
             return ""
 
-        content = example[field_name]
-
-        if role == "user" and "{" in template:
+        if field_config["type"] == "column":
+            if field_config["value"] not in example:
+                return ""
+            content = example[field_config["value"]]
+        else:  # template
             try:
                 template_vars = {key: str(value) for key, value in example.items()}
-                template_vars["content"] = str(content)
-                content = template.format(**template_vars)
+                content = field_config["value"].format(**template_vars)
             except (KeyError, ValueError) as e:
-                logger.warning(f"Template formatting failed: {e}, using raw content")
-                content = str(content)
+                logger.warning(f"Template formatting failed: {e}, using raw template")
+                content = field_config["value"]
 
         if isinstance(content, str):
             content = self.whitespace_pattern.sub(" ", content).strip()
@@ -240,11 +271,11 @@ class FormatConverter:
 
         return False
 
-    def validate_chatml_format(self, dataset: List[Dict]) -> Dict[str, Any]:
+    def validate_chatml_format(self, dataset: Dict[str, List[Dict]]) -> Dict[str, Any]:
         """
-        Validate a dataset in ChatML format and return validation results.
+        Validate a dataset with splits in ChatML format and return validation results.
 
-        This method performs comprehensive validation of the ChatML format, checking:
+        This method performs comprehensive validation of the ChatML format for each split, checking:
         - Overall structure
         - Message format
         - Required fields
@@ -252,53 +283,108 @@ class FormatConverter:
         - Presence of user and assistant messages
 
         Args:
-            dataset (List[Dict]): The dataset to validate
+            dataset (Dict[str, List[Dict]]): The dataset with splits to validate, where keys are split names
+                (e.g., 'train', 'test', 'validation') and values are lists of examples
 
         Returns:
             Dict[str, Any]: Validation results containing:
-                - is_valid (bool): Whether the dataset is valid
-                - errors (List[str]): List of validation errors
-                - warnings (List[str]): List of validation warnings
-                - total_samples (int): Total number of samples
-                - valid_samples (int): Number of valid samples
+                - is_valid (bool): Whether the entire dataset is valid
+                - errors (List[str]): List of validation errors across all splits
+                - warnings (List[str]): List of validation warnings across all splits
+                - total_samples (int): Total number of samples across all splits
+                - valid_samples (int): Number of valid samples across all splits
+                - split_results (Dict[str, Dict]): Detailed validation results for each split
 
         Example:
+            >>> dataset = {
+            ...     "train": [{"messages": [{"role": "user", "content": "Hello"}]}],
+            ...     "test": [{"messages": [{"role": "assistant", "content": "Hi"}]}]
+            ... }
             >>> validation = converter.validate_chatml_format(dataset)
             >>> print(validation['is_valid'])
             True
         """
-        validation_results = {
+        overall_results = {
             "is_valid": True,
             "errors": [],
             "warnings": [],
-            "total_samples": len(dataset),
+            "total_samples": 0,
             "valid_samples": 0,
+            "split_results": {},
         }
 
         if not dataset:
-            validation_results["errors"].append("Dataset is empty")
-            validation_results["is_valid"] = False
-            return validation_results
+            overall_results["errors"].append("Dataset is empty")
+            overall_results["is_valid"] = False
+            return overall_results
 
-        for i, sample in enumerate(dataset):
+        for split_name, split_data in dataset.items():
+            split_results = self._validate_single_split(split_data, split_name)
+            overall_results["split_results"][split_name] = split_results
+
+            # Aggregate results
+            overall_results["total_samples"] += split_results["total_samples"]
+            overall_results["valid_samples"] += split_results["valid_samples"]
+            overall_results["errors"].extend(split_results["errors"])
+            overall_results["warnings"].extend(split_results["warnings"])
+
+        if overall_results["errors"]:
+            overall_results["is_valid"] = False
+
+        return overall_results
+
+    def _validate_single_split(
+        self, split_data: List[Dict], split_name: str
+    ) -> Dict[str, Any]:
+        """
+        Validate a single split of the dataset in ChatML format.
+
+        Args:
+            split_data (List[Dict]): The split data to validate
+            split_name (str): The name of the split being validated
+
+        Returns:
+            Dict[str, Any]: Validation results for this split
+        """
+        split_results = {
+            "is_valid": True,
+            "errors": [],
+            "warnings": [],
+            "total_samples": len(split_data),
+            "valid_samples": 0,
+        }
+
+        if not split_data:
+            split_results["warnings"].append(f"Split '{split_name}' is empty")
+            return split_results
+
+        for i, sample in enumerate(split_data):
             sample_errors = []
 
             if not isinstance(sample, dict):
-                sample_errors.append(f"Sample {i}: Not a dictionary")
+                sample_errors.append(
+                    f"Split '{split_name}', Sample {i}: Not a dictionary"
+                )
                 continue
 
             if "messages" not in sample:
-                sample_errors.append(f"Sample {i}: Missing 'messages' field")
+                sample_errors.append(
+                    f"Split '{split_name}', Sample {i}: Missing 'messages' field"
+                )
                 continue
 
             messages = sample["messages"]
 
             if not isinstance(messages, list):
-                sample_errors.append(f"Sample {i}: 'messages' is not a list")
+                sample_errors.append(
+                    f"Split '{split_name}', Sample {i}: 'messages' is not a list"
+                )
                 continue
 
             if len(messages) == 0:
-                sample_errors.append(f"Sample {i}: 'messages' list is empty")
+                sample_errors.append(
+                    f"Split '{split_name}', Sample {i}: 'messages' list is empty"
+                )
                 continue
 
             has_user = False
@@ -306,25 +392,27 @@ class FormatConverter:
 
             for j, message in enumerate(messages):
                 if not isinstance(message, dict):
-                    sample_errors.append(f"Sample {i}, Message {j}: Not a dictionary")
+                    sample_errors.append(
+                        f"Split '{split_name}', Sample {i}, Message {j}: Not a dictionary"
+                    )
                     continue
 
                 if "role" not in message:
                     sample_errors.append(
-                        f"Sample {i}, Message {j}: Missing 'role' field"
+                        f"Split '{split_name}', Sample {i}, Message {j}: Missing 'role' field"
                     )
                     continue
 
                 if "content" not in message:
                     sample_errors.append(
-                        f"Sample {i}, Message {j}: Missing 'content' field"
+                        f"Split '{split_name}', Sample {i}, Message {j}: Missing 'content' field"
                     )
                     continue
 
                 role = message["role"]
                 if role not in ["system", "user", "assistant", "tool"]:
                     sample_errors.append(
-                        f"Sample {i}, Message {j}: Invalid role '{role}'"
+                        f"Split '{split_name}', Sample {i}, Message {j}: Invalid role '{role}'"
                     )
                     continue
 
@@ -334,23 +422,23 @@ class FormatConverter:
                     has_assistant = True
 
             if not has_user:
-                validation_results["warnings"].append(
-                    f"Sample {i}: No user message found"
+                split_results["warnings"].append(
+                    f"Split '{split_name}', Sample {i}: No user message found"
                 )
             if not has_assistant:
-                validation_results["warnings"].append(
-                    f"Sample {i}: No assistant message found"
+                split_results["warnings"].append(
+                    f"Split '{split_name}', Sample {i}: No assistant message found"
                 )
 
             if not sample_errors:
-                validation_results["valid_samples"] += 1
+                split_results["valid_samples"] += 1
             else:
-                validation_results["errors"].extend(sample_errors)
+                split_results["errors"].extend(sample_errors)
 
-        if validation_results["errors"]:
-            validation_results["is_valid"] = False
+        if split_results["errors"]:
+            split_results["is_valid"] = False
 
-        return validation_results
+        return split_results
 
     def preview_conversion(
         self, dataset: List[Dict], config: Dict[str, Any], num_samples: int = 3

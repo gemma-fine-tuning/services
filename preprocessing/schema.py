@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Literal
 
 
 class DatasetUploadResponse(BaseModel):
@@ -18,22 +18,41 @@ class DatasetAnalysisResponse(BaseModel):
     format_type: str
 
 
+class FieldMappingConfig(BaseModel):
+    type: Literal["column", "template"]
+    value: str
+
+
+class BaseSplitConfig(BaseModel):
+    type: Literal["hf_split", "manual_split", "no_split"]
+
+
+class HFSplitConfig(BaseSplitConfig):
+    type: Literal["hf_split"] = "hf_split"
+    splits: List[str]
+
+
+class ManualSplitConfig(BaseSplitConfig):
+    type: Literal["manual_split"] = "manual_split"
+    sample_size: Optional[int] = None
+    test_size: Optional[float] = None
+
+
+class NoSplitConfig(BaseSplitConfig):
+    type: Literal["no_split"] = "no_split"
+    sample_size: Optional[int] = None
+
+
 class PreprocessingConfig(BaseModel):
-    field_mappings: Dict[str, str] = {}
-    system_message: str = ""
-    include_system: bool = True
-    user_template: str = "{content}"
-    test_size: float = 0.2
-    train_test_split: bool = False
+    field_mappings: Dict[str, FieldMappingConfig] = {}
     normalize_whitespace: bool = True
     augmentation_config: Dict[str, Any] = {}
+    split_config: Optional[HFSplitConfig | ManualSplitConfig | NoSplitConfig] = None
 
 
 class PreprocessingRequest(BaseModel):
-    dataset_source: str  # "upload", "huggingface", or "demo"
-    # TODO: Can make this literal?
+    dataset_source: Literal["upload", "huggingface"]
     dataset_id: str
-    sample_size: Optional[int] = None
     config: PreprocessingConfig
 
 
@@ -41,12 +60,10 @@ class ProcessingResult(BaseModel):
     processed_dataset_id: str
     original_count: int
     processed_count: int
-    train_count: Optional[int] = None
-    test_count: Optional[int] = None
-    train_gcs_path: Optional[str] = None
-    test_gcs_path: Optional[str] = None
-    gcs_path: Optional[str] = None
-    sample_comparison: Dict[str, Any]
+    splits: Dict[
+        str, Dict[str, Any]
+    ]  # split_name -> {count, gcs_path, processed_count}
+    sample_comparison: Dict[str, Any]  # Only one sample from train split
 
 
 class DatasetInfoResponse(BaseModel):
@@ -55,12 +72,11 @@ class DatasetInfoResponse(BaseModel):
     size: int
     created: str
     sample: List[Dict[str, Any]]
-    dataset_type: str  # "raw" or "processed"
-    # TODO: Can make this literal?
+    dataset_type: Literal["raw", "processed"]
 
 
 class PreviewRequest(BaseModel):
-    dataset_source: str
+    dataset_source: Literal["upload", "huggingface"]
     dataset_id: str
     sample_size: int = 5
     config: PreprocessingConfig
@@ -80,7 +96,3 @@ class ValidationResponse(BaseModel):
     warnings: List[str]
     total_samples: int
     valid_samples: int
-
-
-class DemoDatasetResponse(BaseModel):
-    datasets: Dict[str, str]

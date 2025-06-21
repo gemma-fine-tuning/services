@@ -1,7 +1,6 @@
 import uuid
 import logging
 from typing import List, Dict, Any, Optional
-from datasets import Dataset
 from storage.base import StorageInterface
 from .dataset_uploader import DatasetUploader
 from .dataset_loader import DatasetLoader
@@ -16,8 +15,8 @@ from schema import (
     PreprocessingConfig,
     PreviewResponse,
     ValidationResponse,
-    DemoDatasetResponse,
 )
+from datasets import Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +39,6 @@ class DatasetService:
     - Processing datasets to ChatML format
     - Managing processed datasets
     - Validating dataset formats
-    - Accessing demo datasets
 
     Attributes:
         storage (StorageInterface): Interface for storage operations
@@ -131,11 +129,9 @@ class DatasetService:
             dataset_source (str): The source of the dataset. Must be one of:
                 - 'upload': For user-uploaded datasets
                 - 'huggingface': For datasets from Hugging Face
-                - 'demo': For built-in demo datasets
             dataset_id (str): The identifier for the dataset:
                 - For 'upload': The file ID of the uploaded dataset
                 - For 'huggingface': The Hugging Face dataset name
-                - For 'demo': The demo dataset identifier
             sample_size (Optional[int]): The number of samples to analyze.
                 If None, analyzes the entire dataset.
 
@@ -191,10 +187,10 @@ class DatasetService:
             dataset_source (str): The source of the dataset
             dataset_id (str): The identifier for the dataset
             config (PreprocessingConfig): Configuration for processing, including:
-                - field_mappings: Maps input fields to ChatML roles
-                - system_message: Default system message
+                - field_mappings: Maps input fields to ChatML roles with type and value:
+                    - type: "column" or "template"
+                    - value: column name or template string with {column} references
                 - include_system: Whether to include system message
-                - user_template: Template for formatting user content
             num_samples (int): Number of samples to include in preview
 
         Returns:
@@ -210,8 +206,10 @@ class DatasetService:
 
         Example:
             >>> config = PreprocessingConfig(
-            ...     field_mappings={"user_field": "question", "assistant_field": "answer"},
-            ...     system_message="You are a helpful assistant."
+            ...     field_mappings={
+            ...         "user_field": {"type": "column", "value": "question"},
+            ...         "assistant_field": {"type": "template", "value": "Answer: {answer}"}
+            ...     }
             ... )
             >>> preview = await service.preview_processing(
             ...     "upload",
@@ -242,18 +240,17 @@ class DatasetService:
         dataset_source: str,
         dataset_id: str,
         config: PreprocessingConfig,
-        sample_size: Optional[int] = None,
     ) -> ProcessingResult:
         """
-        Process a dataset with the given configuration.
+        Process a dataset to ChatML format.
 
-        This method performs the complete dataset processing workflow:
-        1. Loads the dataset
-        2. Applies data augmentation (if enabled)
-        3. Converts to ChatML format
+        This method performs the complete dataset processing pipeline:
+        1. Loads the dataset from the specified source
+        2. Converts it to ChatML format
+        3. Applies data augmentation if configured
         4. Validates the converted dataset
-        5. Handles train/test split if requested
-        6. Saves the processed dataset
+        5. Saves the processed dataset to storage
+        6. Returns processing results
 
         Args:
             dataset_source (str): The source of the dataset
@@ -277,24 +274,18 @@ class DatasetService:
                 If None, processes the entire dataset.
 
         Returns:
-            ProcessingResult: An object containing:
-                - processed_dataset_id (str): ID of the processed dataset
-                - original_count (int): Number of original samples
-                - processed_count (int): Number of processed samples
-                - train_count (int): Number of training samples (if split)
-                - test_count (int): Number of test samples (if split)
-                - train_gcs_path (str): Path to training data (if split)
-                - test_gcs_path (str): Path to test data (if split)
-                - gcs_path (str): Path to processed data (if not split)
-                - sample_comparison (Dict): Original and processed samples
+            ProcessingResult: An object containing processing results and metadata
 
         Raises:
-            ValueError: If dataset is empty or conversion fails
-            Exception: For other errors during processing
+            Exception: If there's an error during processing
 
         Example:
             >>> config = PreprocessingConfig(
-            ...     field_mappings={"user_field": "question", "assistant_field": "answer"},
+            ...     field_mappings={
+            ...         "system_field": {"type": "template", "value": "You are a helpful assistant."},
+            ...         "user_field": {"type": "column", "value": "question"},
+            ...         "assistant_field": {"type": "template", "value": "Answer: {answer}"}
+            ...     },
             ...     system_message="You are a helpful assistant.",
             ...     train_test_split=True,
             ...     test_size=0.2,
@@ -309,20 +300,21 @@ class DatasetService:
             >>> result = await service.process_dataset(
             ...     "upload",
             ...     "my_dataset_id",
-            ...     config
+            ...     config,
+            ...     split_config=HFSplitConfig(type="hf_split", splits=["train", "test"]),
             ... )
+            >>> result = await service.process_dataset("upload", "my_dataset", config)
         """
         try:
-            dataset = await self.loader.load_dataset(
-                dataset_source, dataset_id, sample_size
-            )
+            # Load dataset with splits
+            dataset = await self.loader.load_dataset(dataset_source, dataset_id, config)
 
             if not dataset:
                 raise ValueError("Dataset is empty or could not be loaded")
 
             config_dict = config.dict()
 
-            processed_dataset = self.converter.convert_to_chatml(dataset, config_dict)
+            processed_dataset = self.converter.convert_to_chatml(dataset, config.dict)
 
             # Apply data augmentation if enabled
             augmentation_config = config_dict.get("augmentation_config", {})
@@ -331,7 +323,10 @@ class DatasetService:
 
             if not processed_dataset:
                 raise ValueError("No samples could be converted to ChatML format")
+            # Convert to ChatML format
+            processed_dataset = self.converter.convert_to_chatml(dataset, config.dict())
 
+            # Validate the processed dataset
             validation = self.converter.validate_chatml_format(processed_dataset)
             if not validation["is_valid"]:
                 logger.warning(f"Dataset validation warnings: {validation['warnings']}")
@@ -342,123 +337,81 @@ class DatasetService:
 
             processed_id = str(uuid.uuid4())
 
-            if config.train_test_split:
-                return await self._save_with_split(
-                    processed_dataset, processed_id, config.test_size, dataset
-                )
-            else:
-                return await self._save_full_dataset(
-                    processed_dataset, processed_id, dataset
-                )
+            # Save all splits
+            return await self._save_dataset(processed_dataset, processed_id, dataset)
 
         except Exception as e:
             logger.error(f"Error processing dataset: {str(e)}")
             raise
 
-    async def _save_with_split(
+    async def _save_dataset(
         self,
-        processed_dataset: List[Dict],
+        processed_dataset: Dict[str, List[Dict]],
         processed_id: str,
-        test_size: float,
-        original_dataset: List[Dict],
+        original_dataset: Dict[str, List[Dict]],
     ) -> ProcessingResult:
         """
-        Save a processed dataset with train/test split.
+        Save a processed dataset with all its splits.
 
         This method:
-        1. Splits the dataset into train and test sets
-        2. Saves both sets to storage
-        3. Returns processing results with split information
+        1. Saves each split of the processed dataset to storage with appropriate suffixes
+        2. Returns processing results with information about all splits
 
         Args:
-            processed_dataset (List[Dict]): The processed dataset to split
+            processed_dataset (Dict[str, List[Dict]]): The processed dataset with splits
             processed_id (str): Unique identifier for the processed dataset
-            test_size (float): Proportion of data to use for testing
-            original_dataset (List[Dict]): The original dataset for comparison
+            original_dataset (Dict[str, List[Dict]]): The original dataset for comparison
 
         Returns:
             ProcessingResult: An object containing split information and paths
 
         Example:
-            >>> result = await service._save_with_split(
-            ...     processed_dataset,
+            >>> result = await service._save_dataset(
+            ...     {"train": [...], "test": [...]},
             ...     "processed_123",
-            ...     0.2,
-            ...     original_dataset
+            ...     {"train": [...], "test": [...]}
             ... )
         """
-        hf_dataset = Dataset.from_list(processed_dataset)
-        split = hf_dataset.train_test_split(test_size=test_size, shuffle=True, seed=42)
+        splits_info = {}
+        total_processed_count = 0
+        total_original_count = 0
 
-        train_dataset = split["train"]
-        test_dataset = split["test"]
+        # Save each split
+        for split_name, split_data in processed_dataset.items():
+            total_processed_count += len(split_data)
 
-        train_blob_name = f"processed_datasets/{processed_id}_train.json"
-        test_blob_name = f"processed_datasets/{processed_id}_test.json"
+            # Create blob name with split suffix
+            blob_name = f"processed_datasets/{processed_id}_{split_name}.json"
 
-        train_gcs_path = await self.storage.upload_data(
-            train_dataset.to_list(), train_blob_name
-        )
-        test_gcs_path = await self.storage.upload_data(
-            test_dataset.to_list(), test_blob_name
-        )
+            # Upload split data
+            gcs_path = await self.storage.upload_data(split_data, blob_name)
+
+            # Store split information
+            splits_info[split_name] = {
+                "count": len(split_data),
+                "gcs_path": gcs_path,
+                "processed_count": len(split_data),
+            }
+
+        # Calculate total original count
+        for split_data in original_dataset.values():
+            total_original_count += len(split_data)
+
+        # Get sample comparison from train split only
+        train_split = processed_dataset.get("train", [])
+        original_train = original_dataset.get("train", [])
+
+        sample_comparison = {
+            "original": original_train[0] if original_train else None,
+            "processed": train_split[0] if train_split else None,
+        }
 
         return ProcessingResult(
             processed_dataset_id=processed_id,
-            original_count=len(original_dataset),
-            processed_count=len(processed_dataset),
-            train_count=len(train_dataset),
-            test_count=len(test_dataset),
-            train_gcs_path=train_gcs_path,
-            test_gcs_path=test_gcs_path,
-            sample_comparison={
-                "original": original_dataset[0] if original_dataset else None,
-                "processed": train_dataset[0] if len(train_dataset) > 0 else None,
-            },
-        )
-
-    async def _save_full_dataset(
-        self,
-        processed_dataset: List[Dict],
-        processed_id: str,
-        original_dataset: List[Dict],
-    ) -> ProcessingResult:
-        """
-        Save a processed dataset without splitting.
-
-        This method:
-        1. Saves the entire processed dataset to storage
-        2. Returns processing results with dataset information
-
-        Args:
-            processed_dataset (List[Dict]): The processed dataset to save
-            processed_id (str): Unique identifier for the processed dataset
-            original_dataset (List[Dict]): The original dataset for comparison
-
-        Returns:
-            ProcessingResult: An object containing dataset information and path
-
-        Example:
-            >>> result = await service._save_full_dataset(
-            ...     processed_dataset,
-            ...     "processed_123",
-            ...     original_dataset
-            ... )
-        """
-        processed_blob_name = f"processed_datasets/{processed_id}.json"
-        gcs_path = await self.storage.upload_data(
-            processed_dataset, processed_blob_name
-        )
-
-        return ProcessingResult(
-            processed_dataset_id=processed_id,
-            original_count=len(original_dataset),
-            processed_count=len(processed_dataset),
-            gcs_path=gcs_path,
-            sample_comparison={
-                "original": original_dataset[0] if original_dataset else None,
-                "processed": processed_dataset[0] if processed_dataset else None,
-            },
+            original_count=total_original_count,
+            processed_count=total_processed_count,
+            splits=splits_info,
+            sample_comparison=sample_comparison,
         )
 
     async def get_dataset_info(
@@ -499,26 +452,44 @@ class DatasetService:
             'raw'
         """
         try:
-            # FIXME: NOT ABLE TO FIND PROCESSED DATASETS
             if dataset_type == "processed":
-                processed_path = f"processed_datasets/{dataset_id}.json"
-                if self.storage.file_exists(processed_path):
-                    possible_paths = [processed_path]
+                # Look for processed datasets with split suffixes
+                processed_files = self.storage.list_files(
+                    prefix=f"processed_datasets/{dataset_id}_"
+                )
+                if processed_files:
+                    possible_paths = processed_files
                 else:
-                    possible_paths = []
+                    # Fallback to old format without suffix
+                    processed_path = f"processed_datasets/{dataset_id}.json"
+                    possible_paths = (
+                        [processed_path]
+                        if self.storage.file_exists(processed_path)
+                        else []
+                    )
             elif dataset_type == "raw":
                 raw_files = self.storage.list_files(
                     prefix=f"raw_datasets/{dataset_id}_"
                 )
                 possible_paths = raw_files if raw_files else []
             else:
-                processed_path = f"processed_datasets/{dataset_id}.json"
+                # Check both processed and raw datasets
+                processed_files = self.storage.list_files(
+                    prefix=f"processed_datasets/{dataset_id}_"
+                )
                 raw_files = self.storage.list_files(
                     prefix=f"raw_datasets/{dataset_id}_"
                 )
+
+                # Also check old processed format
+                old_processed_path = f"processed_datasets/{dataset_id}.json"
+                old_processed_exists = self.storage.file_exists(old_processed_path)
+
                 possible_paths = (
-                    [processed_path] if self.storage.file_exists(processed_path) else []
-                ) + (raw_files if raw_files else [])
+                    (processed_files if processed_files else [])
+                    + ([old_processed_path] if old_processed_exists else [])
+                    + (raw_files if raw_files else [])
+                )
 
             blob_name = None
             for path in possible_paths:
@@ -554,11 +525,11 @@ class DatasetService:
             logger.error(f"Error getting dataset info: {str(e)}")
             raise
 
-    def validate_dataset(self, dataset: List[Dict]) -> ValidationResponse:
+    def validate_dataset(self, dataset: Dict[str, List[Dict]]) -> ValidationResponse:
         """
-        Validate a dataset in ChatML format.
+        Validate a dataset with splits in ChatML format.
 
-        This method performs comprehensive validation of the ChatML format,
+        This method performs comprehensive validation of the ChatML format for each split,
         checking:
         - Overall structure
         - Message format
@@ -567,50 +538,33 @@ class DatasetService:
         - Presence of user and assistant messages
 
         Args:
-            dataset (List[Dict]): The dataset to validate
+            dataset (Dict[str, List[Dict]]): The dataset with splits to validate
 
         Returns:
             ValidationResponse: An object containing:
-                - is_valid (bool): Whether the dataset is valid
-                - errors (List[str]): List of validation errors
-                - warnings (List[str]): List of validation warnings
-                - total_samples (int): Total number of samples
-                - valid_samples (int): Number of valid samples
+                - is_valid (bool): Whether the entire dataset is valid
+                - errors (List[str]): List of validation errors across all splits
+                - warnings (List[str]): List of validation warnings across all splits
+                - total_samples (int): Total number of samples across all splits
+                - valid_samples (int): Number of valid samples across all splits
 
         Example:
-            >>> validation = service.validate_dataset(dataset)
+            >>> validation = service.validate_dataset({"train": [...], "test": [...]})
             >>> print(validation.is_valid)
             True
         """
         try:
             validation = self.converter.validate_chatml_format(dataset)
-            return ValidationResponse(**validation)
+            return ValidationResponse(
+                is_valid=validation["is_valid"],
+                errors=validation["errors"],
+                warnings=validation["warnings"],
+                total_samples=validation["total_samples"],
+                valid_samples=validation["valid_samples"],
+            )
         except Exception as e:
             logger.error(f"Error validating dataset: {str(e)}")
             raise
-
-    def get_demo_datasets(self) -> DemoDatasetResponse:
-        """
-        Get available demo datasets.
-
-        This method returns information about built-in demo datasets that can be
-        used for testing and demonstration purposes.
-
-        Returns:
-            DemoDatasetResponse: An object containing:
-                - datasets (Dict[str, str]): Dictionary mapping dataset IDs to descriptions
-
-        Example:
-            >>> demo_datasets = service.get_demo_datasets()
-            >>> print(demo_datasets.datasets)
-            {
-                'qa_demo': 'Question-Answer pairs for training Q&A models',
-                'instruction_demo': 'Instruction-following examples',
-                'conversation_demo': 'Conversational examples in ChatML format'
-            }
-        """
-        datasets = self.loader.get_available_demo_datasets()
-        return DemoDatasetResponse(datasets=datasets)
 
     def get_column_statistics(self, dataset: List[Dict], column: str) -> Dict[str, Any]:
         """
