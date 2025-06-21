@@ -25,13 +25,17 @@ class AugmentationMethod(Enum):
 
 @dataclass
 class AugmentationConfig:
-    """Configuration for augmentation pipeline"""
+    """
+    Configuration for augmentation pipeline (used internally in the backend)
+    This is different from the user-facing API request configuration (see AugmentationSetupConfig).
+    """
 
-    # Control which methods are enabled
+    # Control which methods are enabled -- this is built in the pipeline based on user preferences
     enabled_methods: List[AugmentationMethod]
 
     # General settings
     augmentation_factor: float = 1.5
+    lightweight_mode: bool = False
 
     # Method-specific settings
     eda_settings: Optional[Dict[str, Any]] = None
@@ -64,9 +68,9 @@ class AugmentationResult:
 
     original_count: int
     final_count: int
-    methods_used: List[str]
-    synthesis_used: bool
-    errors: List[str]
+    methods_used: List[str] = None
+    synthesis_used: bool = False
+    errors: List[str] = None
 
     @property
     def success_rate(self) -> float:
@@ -336,7 +340,11 @@ def run_augment_pipeline(dataset, user_preferences):
     AugmentationManager interface and TextAugmentationPipeline backend.
     This function takes user preferences and dataset,
     builds the configuration, and runs the augmentation.
-    **You should only use this function in the backend service.**
+
+    NOTE: This function supports customising parameters for each method,
+    however it is not recommended so it has been removed from the public API.
+
+    **You should always use this function in the backend service.**
     You should not try to build your own AugmentationConfig or
     AugmentationManager instances.
 
@@ -369,6 +377,17 @@ def run_augment_pipeline(dataset, user_preferences):
     ```
     """
 
+    # Validate inputs
+    if not dataset:
+        logger.warning("Empty dataset provided to run_augment_pipeline")
+        return dataset, AugmentationResult(
+            original_count=0,
+            final_count=0,
+            errors=["Empty dataset provided"],
+        )
+
+    augmentation_factor = user_preferences.get("augmentation_factor", 1.5)
+
     # Build enabled methods based on preferences
     enabled_methods = []
 
@@ -389,40 +408,51 @@ def run_augment_pipeline(dataset, user_preferences):
     # Default to EDA if no methods selected
     if not enabled_methods:
         enabled_methods = [AugmentationMethod.EDA]
+        logger.info("No augmentation methods specified, defaulting to EDA")
 
-    # Create configuration
-    config = AugmentationConfig(
-        enabled_methods=enabled_methods,
-        augmentation_factor=user_preferences.get("augmentation_factor", 1.5),
-        # Method-specific settings
-        eda_settings={
-            "eda_alpha_sr": user_preferences.get("eda_synonym_rate", 0.1),
-            "eda_alpha_ri": user_preferences.get("eda_insert_rate", 0.1),
-            "eda_alpha_rs": user_preferences.get("eda_swap_rate", 0.1),
-            "eda_p_rd": user_preferences.get("eda_delete_rate", 0.1),
-        },
-        back_translation_settings={
-            "intermediate_lang": user_preferences.get("translation_language", "fr"),
-        },
-        paraphrasing_settings={
-            "paraphrase_model": user_preferences.get(
-                "paraphrase_model", "humarin/chatgpt_paraphraser_on_T5_base"
-            ),
-        },
-        synthesis_settings={
-            "gemini_api_key": user_preferences.get("gemini_api_key"),
-            "gemini_model": user_preferences.get(
-                "gemini_model", "gemini-2.0-flash-001"
-            ),
-            "synthesis_ratio": user_preferences.get("synthesis_ratio", 0.5),
-            "system_message": user_preferences.get("system_message", ""),
-            "max_batch_size": user_preferences.get("max_batch_size", 10),
-            "custom_prompt": user_preferences.get("custom_prompt"),
-        },
-    )
+    try:
+        # Create configuration
+        config = AugmentationConfig(
+            enabled_methods=enabled_methods,
+            augmentation_factor=augmentation_factor,
+            lightweight_mode=user_preferences.get("lightweight_mode", False),
+            # Method-specific settings
+            eda_settings={
+                "eda_alpha_sr": user_preferences.get("eda_synonym_rate", 0.1),
+                "eda_alpha_ri": user_preferences.get("eda_insert_rate", 0.1),
+                "eda_alpha_rs": user_preferences.get("eda_swap_rate", 0.1),
+                "eda_p_rd": user_preferences.get("eda_delete_rate", 0.1),
+            },
+            back_translation_settings={
+                "intermediate_lang": user_preferences.get("translation_language", "fr"),
+            },
+            paraphrasing_settings={
+                "paraphrase_model": user_preferences.get(
+                    "paraphrase_model", "humarin/chatgpt_paraphraser_on_T5_base"
+                ),
+            },
+            synthesis_settings={
+                "gemini_api_key": user_preferences.get("gemini_api_key"),
+                "gemini_model": user_preferences.get(
+                    "gemini_model", "gemini-2.0-flash-lite"
+                ),
+                "synthesis_ratio": user_preferences.get("synthesis_ratio", 0.5),
+                "system_message": user_preferences.get("system_message", ""),
+                "max_batch_size": user_preferences.get("max_batch_size", 10),
+                "custom_prompt": user_preferences.get("custom_prompt"),
+            },
+        )
 
-    # Configure and run augmentation
-    manager = AugmentationManager()
-    manager.configure(config)
+        # Configure and run augmentation
+        manager = AugmentationManager()
+        manager.configure(config)
 
-    return manager.augment_dataset(dataset)
+        return manager.augment_dataset(dataset)
+
+    except Exception as e:
+        logger.error(f"Error in run_augment_pipeline: {e}")
+        return dataset, AugmentationResult(
+            original_count=len(dataset),
+            final_count=len(dataset),
+            errors=[f"Configuration error: {str(e)}"],
+        )

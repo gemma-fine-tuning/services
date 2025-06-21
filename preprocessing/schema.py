@@ -43,10 +43,26 @@ class NoSplitConfig(BaseSplitConfig):
     sample_size: Optional[int] = None
 
 
+class AugmentationSetupConfig(BaseModel):
+    """
+    Currently we do not support customising parameters for augmentation methods.
+    This is supported in the backend but we do not expose it in the API for now for simplicity.
+    """
+
+    augmentation_factor: float = 1.5
+    use_eda: Optional[bool] = False
+    use_back_translation: Optional[bool] = False
+    use_paraphrasing: Optional[bool] = False
+    use_synthesis: Optional[bool] = False
+    gemini_api_key: Optional[str] = None
+    synthesis_ratio: Optional[float] = None
+    custom_prompt: Optional[str] = None
+
+
 class PreprocessingConfig(BaseModel):
     field_mappings: Dict[str, FieldMappingConfig] = {}
     normalize_whitespace: bool = True
-    augmentation_config: Dict[str, Any] = {}
+    augmentation_config: Optional[AugmentationSetupConfig] = None
     split_config: Optional[HFSplitConfig | ManualSplitConfig | NoSplitConfig] = None
 
 

@@ -314,17 +314,17 @@ class DatasetService:
 
             config_dict = config.dict()
 
-            processed_dataset = self.converter.convert_to_chatml(dataset, config.dict)
-
-            # Apply data augmentation if enabled
-            augmentation_config = config_dict.get("augmentation_config", {})
-            if augmentation_config.get("enabled", False):
-                dataset = self._apply_augmentation(dataset, augmentation_config)
+            processed_dataset = self.converter.convert_to_chatml(dataset, config_dict)
 
             if not processed_dataset:
                 raise ValueError("No samples could be converted to ChatML format")
-            # Convert to ChatML format
-            processed_dataset = self.converter.convert_to_chatml(dataset, config.dict())
+
+            # Apply data augmentation if the user created a config specification
+            augmentation_config = config_dict.get("augmentation_config", {})
+            if augmentation_config:
+                processed_dataset = self._apply_augmentation(
+                    processed_dataset, augmentation_config
+                )
 
             # Validate the processed dataset
             validation = self.converter.validate_chatml_format(processed_dataset)
@@ -598,21 +598,19 @@ class DatasetService:
         """
         return self.analyzer.get_column_statistics(dataset, column)
 
-    def _apply_augmentation(
-        self, dataset: List[Dict], augmentation_config: Dict
-    ) -> List[Dict]:
+    def _apply_augmentation(self, dataset, augmentation_config: Dict):
         """
         Apply data augmentation to the dataset using the augmentation pipeline.
 
-        This method converts the dataset to HuggingFace format, applies augmentation,
-        and returns the augmented dataset as a list of dictionaries.
+        This method handles both single lists and split dictionaries, applying augmentation
+        to each split individually when dealing with split data.
 
         Args:
-            dataset (List[Dict]): The dataset to augment
+            dataset: The dataset to augment - can be List[Dict] or Dict[str, List[Dict]]
             augmentation_config (Dict): Configuration for the augmentation pipeline
 
         Returns:
-            List[Dict]: The augmented dataset
+            Same type as input: List[Dict] or Dict[str, List[Dict]] with augmented data
 
         Example augmentation_config:
         {
@@ -628,8 +626,47 @@ class DatasetService:
         }
         """
         try:
+            # Check if dataset is a dict with splits or a simple list
+            if isinstance(dataset, dict):
+                # Handle split dataset - augment each split individually
+                augmented_dataset = {}
+                for split_name, split_data in dataset.items():
+                    logger.info(
+                        f"Augmenting {split_name} split with {len(split_data)} samples"
+                    )
+                    augmented_split = self._augment_split(
+                        split_data, augmentation_config
+                    )
+                    augmented_dataset[split_name] = augmented_split
+                return augmented_dataset
+            else:
+                # Handle simple list dataset
+                return self._augment_split(dataset, augmentation_config)
+
+        except Exception as e:
+            logger.error(f"Augmentation failed: {e}")
+            logger.warning("Continuing without augmentation")
+            return dataset
+
+    def _augment_split(
+        self, split_data: List[Dict], augmentation_config: Dict
+    ) -> List[Dict]:
+        """
+        Apply augmentation to a single split or list of data.
+
+        Args:
+            split_data (List[Dict]): The data to augment
+            augmentation_config (Dict): Configuration for the augmentation pipeline
+
+        Returns:
+            List[Dict]: The augmented data
+        """
+        try:
+            if not split_data:
+                return split_data
+
             # Convert to HuggingFace Dataset for augmentation
-            hf_dataset = Dataset.from_list(dataset)
+            hf_dataset = Dataset.from_list(split_data)
 
             # Apply augmentation pipeline
             augmented_list, result = run_augment_pipeline(
@@ -641,15 +678,8 @@ class DatasetService:
                 for error in result.errors:
                     logger.warning(f"Augmentation error: {error}")
 
-            logger.info(f"Augmentation methods used: {result.methods_used}")
-            logger.info(f"Synthesis used: {result.synthesis_used}")
-            logger.info(
-                f"Dataset augmented from {len(dataset)} to {len(augmented_list)} samples"
-            )
-
             return augmented_list
 
         except Exception as e:
-            logger.error(f"Augmentation failed: {e}")
-            logger.warning("Continuing without augmentation")
-            return dataset
+            logger.error(f"Split augmentation failed: {e}")
+            return split_data

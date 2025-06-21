@@ -297,12 +297,26 @@ class TextAugmentationPipeline:
         self, dataset: List[Dict[str, Any]], augmentation_factor: float
     ) -> List[Dict[str, Any]]:
         """Augment entire dataset"""
-        if augmentation_factor <= 1.0:
+        if not dataset:
+            logger.warning("Empty dataset provided to TextAugmentationPipeline")
             return dataset
 
+        if augmentation_factor <= 1.0:
+            logger.info(
+                f"Augmentation factor {augmentation_factor} <= 1.0, returning original dataset"
+            )
+            return dataset
+
+        original_size = len(dataset)
         augmented_dataset = list(dataset)
-        target_size = int(len(dataset) * augmentation_factor)
-        additional_needed = target_size - len(dataset)
+        target_size = int(original_size * augmentation_factor)
+        additional_needed = target_size - original_size
+
+        if additional_needed <= 0:
+            logger.warning(
+                f"No additional samples needed (target: {target_size}, original: {original_size})"
+            )
+            return dataset
 
         # Use synthesis if available
         if self.synthesizer and self.synthesizer.is_available():
@@ -343,9 +357,22 @@ class TextAugmentationPipeline:
                     logger.warning(f"Failed to augment sample: {e}")
                     augmented_dataset.append(sample)  # Use original as fallback
 
-        logger.info(
-            f"Dataset expanded from {len(dataset)} to {len(augmented_dataset)} samples"
-        )
+        final_size = len(augmented_dataset)
+        logger.info(f"Dataset expanded from {original_size} to {final_size} samples")
+
+        # Validate final result
+        if final_size == 0:
+            logger.error(
+                "Augmentation resulted in 0 samples, returning original dataset"
+            )
+            return dataset
+
+        if final_size < original_size:
+            logger.warning(
+                f"Augmentation reduced dataset size from {original_size} to {final_size}, returning original dataset"
+            )
+            return dataset
+
         return augmented_dataset
 
     def _augment_conversation(self, sample: Dict[str, Any]) -> Dict[str, Any]:
