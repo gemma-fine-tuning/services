@@ -6,6 +6,7 @@ from .dataset_uploader import DatasetUploader
 from .dataset_loader import DatasetLoader
 from .dataset_analyzer import DatasetAnalyzer
 from .format_converter import FormatConverter
+from augmentation import run_augment_pipeline
 from schema import (
     DatasetUploadResponse,
     DatasetAnalysisResponse,
@@ -15,6 +16,7 @@ from schema import (
     PreviewResponse,
     ValidationResponse,
 )
+from datasets import Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -245,14 +247,31 @@ class DatasetService:
         This method performs the complete dataset processing pipeline:
         1. Loads the dataset from the specified source
         2. Converts it to ChatML format
-        3. Validates the converted dataset
-        4. Saves the processed dataset to storage
-        5. Returns processing results
+        3. Applies data augmentation if configured
+        4. Validates the converted dataset
+        5. Saves the processed dataset to storage
+        6. Returns processing results
 
         Args:
             dataset_source (str): The source of the dataset
             dataset_id (str): The identifier for the dataset
-            config (PreprocessingConfig): Configuration for processing
+            config (PreprocessingConfig): Configuration for processing, including:
+                - field_mappings: Maps input fields to ChatML roles
+                - system_message: Default system message
+                - include_system: Whether to include system message
+                - user_template: Template for formatting user content
+                - train_test_split: Whether to split into train/test sets
+                - test_size: Size of test set (if splitting)
+                - augmentation_config: Configuration for data augmentation, including:
+                    - enabled: Whether to apply augmentation
+                    - use_eda: Whether to use Easy Data Augmentation
+                    - use_back_translation: Whether to use back translation
+                    - use_paraphrasing: Whether to use paraphrasing
+                    - use_synthesis: Whether to use AI synthesis
+                    - gemini_api_key: API key for Gemini (if using synthesis)
+                    - augmentation_factor: Factor to increase dataset size
+            sample_size (Optional[int]): Number of samples to process.
+                If None, processes the entire dataset.
 
         Returns:
             ProcessingResult: An object containing processing results and metadata
@@ -267,6 +286,21 @@ class DatasetService:
             ...         "user_field": {"type": "column", "value": "question"},
             ...         "assistant_field": {"type": "template", "value": "Answer: {answer}"}
             ...     },
+            ...     system_message="You are a helpful assistant.",
+            ...     train_test_split=True,
+            ...     test_size=0.2,
+            ...     augmentation_config={
+            ...         "enabled": True,
+            ...         "use_eda": True,
+            ...         "use_synthesis": True,
+            ...         "gemini_api_key": "your_api_key",
+            ...         "augmentation_factor": 1.5
+            ...     }
+            ... )
+            >>> result = await service.process_dataset(
+            ...     "upload",
+            ...     "my_dataset_id",
+            ...     config,
             ...     split_config=HFSplitConfig(type="hf_split", splits=["train", "test"]),
             ... )
             >>> result = await service.process_dataset("upload", "my_dataset", config)
@@ -275,8 +309,22 @@ class DatasetService:
             # Load dataset with splits
             dataset = await self.loader.load_dataset(dataset_source, dataset_id, config)
 
-            # Convert to ChatML format
-            processed_dataset = self.converter.convert_to_chatml(dataset, config.dict())
+            if not dataset:
+                raise ValueError("Dataset is empty or could not be loaded")
+
+            config_dict = config.dict()
+
+            processed_dataset = self.converter.convert_to_chatml(dataset, config_dict)
+
+            if not processed_dataset:
+                raise ValueError("No samples could be converted to ChatML format")
+
+            # Apply data augmentation if the user created a config specification
+            augmentation_config = config_dict.get("augmentation_config", {})
+            if augmentation_config:
+                processed_dataset = self._apply_augmentation(
+                    processed_dataset, augmentation_config
+                )
 
             # Validate the processed dataset
             validation = self.converter.validate_chatml_format(processed_dataset)
@@ -549,3 +597,89 @@ class DatasetService:
             45.6
         """
         return self.analyzer.get_column_statistics(dataset, column)
+
+    def _apply_augmentation(self, dataset, augmentation_config: Dict):
+        """
+        Apply data augmentation to the dataset using the augmentation pipeline.
+
+        This method handles both single lists and split dictionaries, applying augmentation
+        to each split individually when dealing with split data.
+
+        Args:
+            dataset: The dataset to augment - can be List[Dict] or Dict[str, List[Dict]]
+            augmentation_config (Dict): Configuration for the augmentation pipeline
+
+        Returns:
+            Same type as input: List[Dict] or Dict[str, List[Dict]] with augmented data
+
+        Example augmentation_config:
+        {
+            "enabled": True,
+            "use_eda": True,
+            "use_back_translation": True,
+            "use_paraphrasing": False,
+            "use_synthesis": True,
+            "gemini_api_key": "your_gemini_api_key",
+            "augmentation_factor": 1.5,
+            "eda_alpha_sr": 0.1,
+            "paraphrase_model": "humarin/chatgpt_paraphraser_on_T5_base"
+        }
+        """
+        try:
+            # Check if dataset is a dict with splits or a simple list
+            if isinstance(dataset, dict):
+                # Handle split dataset - augment each split individually
+                augmented_dataset = {}
+                for split_name, split_data in dataset.items():
+                    logger.info(
+                        f"Augmenting {split_name} split with {len(split_data)} samples"
+                    )
+                    augmented_split = self._augment_split(
+                        split_data, augmentation_config
+                    )
+                    augmented_dataset[split_name] = augmented_split
+                return augmented_dataset
+            else:
+                # Handle simple list dataset
+                return self._augment_split(dataset, augmentation_config)
+
+        except Exception as e:
+            logger.error(f"Augmentation failed: {e}")
+            logger.warning("Continuing without augmentation")
+            return dataset
+
+    def _augment_split(
+        self, split_data: List[Dict], augmentation_config: Dict
+    ) -> List[Dict]:
+        """
+        Apply augmentation to a single split or list of data.
+
+        Args:
+            split_data (List[Dict]): The data to augment
+            augmentation_config (Dict): Configuration for the augmentation pipeline
+
+        Returns:
+            List[Dict]: The augmented data
+        """
+        try:
+            if not split_data:
+                return split_data
+
+            # Convert to HuggingFace Dataset for augmentation
+            hf_dataset = Dataset.from_list(split_data)
+
+            # Apply augmentation pipeline
+            augmented_list, result = run_augment_pipeline(
+                hf_dataset.to_list(), augmentation_config
+            )
+
+            # Log results
+            if result.errors:
+                for error in result.errors:
+                    logger.warning(f"Augmentation error: {error}")
+
+            return augmented_list
+
+        except Exception as e:
+            logger.error(f"Split augmentation failed: {e}")
+            return split_data
