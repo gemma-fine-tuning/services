@@ -19,3 +19,4 @@ designs/
 test*
 
 .DS_Store
+data/
