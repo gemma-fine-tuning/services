@@ -8,13 +8,12 @@ from training.schema import (
     InferenceRequest,
     InferenceResponse,
 )
-
-from services import run_inference, run_training
+from services import TrainingService, run_inference
 
 app = FastAPI(
     title="Gemma Training Service",
     version="1.0.0",
-    description="Training backend for fine-tuning LLMs with various methods",
+    description="Training backend (Cloud Run GPU) for fine-tuning LLMs with various methods",
 )
 logging.basicConfig(
     level=logging.INFO,
@@ -42,8 +41,9 @@ async def health_check():
 async def train(request: TrainRequest):
     """Start training with given configuration"""
     try:
-        result = run_training(request)
-        return result
+        # Use new simplified API to get appropriate training service
+        training_service = TrainingService.from_provider(request.model_config.provider)
+        return training_service.run_training(request)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

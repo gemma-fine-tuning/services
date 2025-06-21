@@ -19,6 +19,8 @@ class InferenceService:
     NOTE: We need to implement a way to tell if the model is a standard Transformers model
     or an Unsloth model. This can be done by storing it in the metadata and read it when
     loading from GCS. The InferenceService will then decide which private method to call.
+
+    TODO: We might want to adopt the factory design pattern here to align with training service
     """
 
     def __init__(self):

@@ -13,6 +13,7 @@ class ModelConfig(BaseModel):
     epochs: int
     max_seq_length: int
     gradient_accumulation_steps: int
+    provider: Literal["unsloth", "huggingface"] = "huggingface"
 
 
 class TrainRequest(BaseModel):
