@@ -72,19 +72,25 @@ class HuggingFaceTrainingService(BaseTrainingService):
             model_config.get("method", "LoRA"),
         )
 
-        # 3. Setup LoRA config
+        # 3. Prepare datasets for HuggingFace training format
+        train_dataset = self._prepare_hf_dataset(train_dataset, tokenizer)
+        prepared_eval_dataset = None
+        if eval_dataset is not None:
+            prepared_eval_dataset = self._prepare_hf_dataset(eval_dataset, tokenizer)
+
+        # 4. Setup LoRA config
         peft_config = self._setup_lora_config(model_config)
 
-        # 4. Setup training args
+        # 5. Setup training args
         training_args = self._setup_training_args(model_config, job_id)
 
-        # 5. Train
+        # 6. Train
         torch.cuda.empty_cache()
         trainer = self.SFTTrainer(
             model=model,
             args=training_args,
             train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
+            eval_dataset=prepared_eval_dataset,
             peft_config=peft_config,
             processing_class=tokenizer,
         )
@@ -195,6 +201,30 @@ class HuggingFaceTrainingService(BaseTrainingService):
             report_to="none",
         )
 
+    def _prepare_hf_dataset(self, dataset, tokenizer):
+        """
+        Prepare dataset for HuggingFace SFTTrainer format.
+
+        The SFTTrainer can handle ChatML format directly, but we ensure
+        the format is correct and consistent with preprocessing output.
+        """
+        # HuggingFace SFTTrainer expects datasets with "messages" field
+        # which is exactly what our preprocessing service outputs
+        # No transformation needed - just verify the format
+
+        def verify_format(examples):
+            # Verify that all examples have the expected "messages" field
+            messages_batch = examples.get("messages", [])
+            if not messages_batch:
+                raise ValueError(
+                    "Dataset is missing 'messages' field - incompatible with preprocessing output"
+                )
+            return examples
+
+        # Apply verification
+        dataset = dataset.map(verify_format, batched=True)
+        return dataset
+
 
 class UnslothTrainingService(BaseTrainingService):
     """Training service using Unsloth framework"""
@@ -207,7 +237,6 @@ class UnslothTrainingService(BaseTrainingService):
             standardize_data_formats,
             train_on_responses_only,
         )
-        from datasets import load_dataset
         from trl import SFTTrainer, SFTConfig
 
         # Store imports as instance variables
@@ -215,7 +244,6 @@ class UnslothTrainingService(BaseTrainingService):
         self.get_chat_template = get_chat_template
         self.standardize_data_formats = standardize_data_formats
         self.train_on_responses_only = train_on_responses_only
-        self.load_dataset = load_dataset
         self.SFTTrainer = SFTTrainer
         self.SFTConfig = SFTConfig
 
@@ -256,9 +284,14 @@ class UnslothTrainingService(BaseTrainingService):
         )
 
         # 3. Prepare dataset for Unsloth format
-        # TODO: Figure out if this is necessary since we've already done preprocessing
-        # If so we should do post-preprocessing to match Unsloth's expected format
         train_dataset = self._prepare_unsloth_dataset(train_dataset, tokenizer)
+
+        # Prepare eval dataset if available
+        prepared_eval_dataset = None
+        if eval_dataset is not None:
+            prepared_eval_dataset = self._prepare_unsloth_dataset(
+                eval_dataset, tokenizer
+            )
 
         # 4. Setup training args
         training_args = self._setup_unsloth_training_args(model_config, job_id)
@@ -269,7 +302,7 @@ class UnslothTrainingService(BaseTrainingService):
             model=model,
             tokenizer=tokenizer,
             train_dataset=train_dataset,
-            eval_dataset=None,  # Unsloth typically doesn't use eval during training
+            eval_dataset=prepared_eval_dataset,
             args=training_args,
         )
 
@@ -347,12 +380,17 @@ class UnslothTrainingService(BaseTrainingService):
         return model, tokenizer
 
     def _prepare_unsloth_dataset(self, dataset, tokenizer):
-        """Prepare dataset for Unsloth training format"""
+        """
+        Prepare dataset for Unsloth training format
+        Source: https://docs.unsloth.ai/basics/datasets-guide
+        """
         # Standardize format
         dataset = self.standardize_data_formats(dataset)
 
         def formatting_prompts_func(examples):
-            convos = examples["conversations"]
+            # examples["messages"] is a batch of message arrays -> we expect this to be well formatted in preprocessing
+            # each convo is a list of message dicts: [{"role": "user", "content": "..."}, ...]
+            convos = examples["messages"]
             texts = [
                 tokenizer.apply_chat_template(
                     convo, tokenize=False, add_generation_prompt=False
