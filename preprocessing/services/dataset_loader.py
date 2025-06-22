@@ -114,12 +114,11 @@ class DatasetLoader:
         Example:
             >>> dataset = await loader._load_uploaded_dataset("123e4567-e89b-12d3-a456-426614174000", config)
         """
-        print(self.storage.list_files())
         files = self.storage.list_files(prefix=f"raw_datasets/{dataset_id}_")
         if not files:
             raise FileNotFoundError("Uploaded dataset not found")
 
-        file_path = files[0]
+        file_path = f"{self.storage.base_path}/{files[0]}"
         filename = file_path.split("_", 1)[1]
 
         # find the type of file
