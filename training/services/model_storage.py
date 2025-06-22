@@ -4,6 +4,10 @@ from typing import Optional
 from dataclasses import dataclass
 from google.cloud import storage
 from datasets import Dataset
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -139,6 +143,10 @@ class ModelStorageService:
             eval_data = json.loads(eval_blob.download_as_text())
             if eval_data:
                 eval_dataset = Dataset.from_list(eval_data)
+        else:
+            logger.warning(
+                f"Eval dataset not found for {processed_dataset_id}, using train only"
+            )
 
         return train_dataset, eval_dataset
 
