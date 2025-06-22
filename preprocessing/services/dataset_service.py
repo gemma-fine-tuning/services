@@ -326,15 +326,6 @@ class DatasetService:
                     processed_dataset, augmentation_config
                 )
 
-            # Validate the processed dataset
-            validation = self.converter.validate_chatml_format(processed_dataset)
-            if not validation["is_valid"]:
-                logger.warning(f"Dataset validation warnings: {validation['warnings']}")
-                if validation["errors"]:
-                    raise ValueError(
-                        f"Dataset validation failed: {validation['errors'][:3]}"
-                    )
-
             processed_id = str(uuid.uuid4())
 
             # Save all splits
