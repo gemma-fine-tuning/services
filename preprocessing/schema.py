@@ -29,7 +29,7 @@ class BaseSplitConfig(BaseModel):
 
 class HFSplitConfig(BaseSplitConfig):
     type: Literal["hf_split"] = "hf_split"
-    splits: List[str]
+    splits: Optional[List[str]] = None
 
 
 class ManualSplitConfig(BaseSplitConfig):
