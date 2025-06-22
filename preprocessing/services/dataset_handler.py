@@ -1,14 +1,18 @@
 import uuid
+import json
+from datetime import datetime
 import logging
 from typing import Optional, Dict
 from werkzeug.utils import secure_filename
 from storage.base import StorageInterface
 from schema import DatasetUploadResponse
+from datasets import DatasetDict
+import io
 
 logger = logging.getLogger(__name__)
 
 
-class DatasetUploader:
+class DatasetHandler:
     """
     A class that handles dataset file uploads and storage operations.
 
@@ -30,13 +34,13 @@ class DatasetUploader:
 
     Example:
         >>> storage = StorageInterface()
-        >>> uploader = DatasetUploader(storage)
-        >>> response = await uploader.upload_dataset(file_data, "dataset.csv")
+        >>> handler = DatasetHandler(storage)
+        >>> response = await handler.upload_dataset(file_data, "dataset.csv")
     """
 
     def __init__(self, storage: StorageInterface):
         """
-        Initialize the DatasetUploader with a storage interface.
+        Initialize the DatasetHandler with a storage interface.
 
         Args:
             storage (StorageInterface): An interface for storage operations that provides
@@ -67,7 +71,7 @@ class DatasetUploader:
             bool: True if the file extension is supported, False otherwise
 
         Example:
-            >>> is_allowed = uploader._is_allowed_file("dataset.csv")
+            >>> is_allowed = handler._is_allowed_file("dataset.csv")
             >>> print(is_allowed)
             True
         """
@@ -114,7 +118,7 @@ class DatasetUploader:
         Example:
             >>> with open("dataset.csv", "rb") as f:
             ...     file_data = f.read()
-            >>> response = await uploader.upload_dataset(
+            >>> response = await handler.upload_dataset(
             ...     file_data,
             ...     "dataset.csv",
             ...     metadata={"description": "My dataset"}
@@ -156,3 +160,56 @@ class DatasetUploader:
         except Exception as e:
             logger.error(f"Error uploading dataset: {str(e)}")
             raise
+
+    async def upload_processed_dataset(
+        self, dataset: DatasetDict, dataset_id: str
+    ) -> str:
+        """
+        Upload a processed dataset to the storage.
+        The directory structure is as follows:
+        - processed_datasets/
+            - dataset_id/
+                - split_name.parquet (all splits are saved in the same directory)
+                - metadata.json (contains the metadata of the dataset)
+
+        Args:
+            dataset (DatasetDict): The processed dataset to upload
+            dataset_id (str): The unique identifier for the dataset
+
+        Returns:
+            str: The file path of the uploaded dataset
+
+        Raises:
+            ValueError: If the dataset is empty or if the dataset is not in the correct format
+        """
+        if not dataset:
+            raise ValueError("Dataset is empty")
+
+        if not dataset_id:
+            raise ValueError("Dataset ID is required")
+
+        metadata = {
+            "dataset_id": dataset_id,
+            "upload_type": "processed_upload",
+            "upload_date": datetime.now().isoformat(),
+        }
+
+        base_blob_name = f"processed_datasets/{dataset_id}"
+
+        for split_name, split_dataset in dataset.items():
+            buf = io.BytesIO()
+            split_dataset.to_parquet(buf)
+            blob_name = f"{base_blob_name}/{split_name}.parquet"
+            split_path = await self.storage.upload_data(buf.getvalue(), blob_name)
+            metadata[split_name] = {
+                "num_rows": split_dataset.num_rows,
+                "path": split_path,
+            }
+
+        metadata_path = await self.storage.upload_data(
+            json.dumps(metadata), f"{base_blob_name}/metadata.json"
+        )
+
+        dataset_path = metadata_path.replace("metadata.json", "")
+
+        return dataset_path

@@ -2,7 +2,7 @@ import uuid
 import logging
 from typing import List, Dict, Any, Optional
 from storage.base import StorageInterface
-from .dataset_uploader import DatasetUploader
+from .dataset_handler import DatasetHandler
 from .dataset_loader import DatasetLoader
 from .dataset_analyzer import DatasetAnalyzer
 from .format_converter import FormatConverter
@@ -14,7 +14,6 @@ from schema import (
     DatasetInfoResponse,
     PreprocessingConfig,
     PreviewResponse,
-    ValidationResponse,
 )
 from datasets import Dataset
 
@@ -27,7 +26,7 @@ class DatasetService:
     for dataset management, processing, and analysis.
 
     This service combines functionality from multiple components:
-    - DatasetUploader: Handles file uploads
+    - DatasetHandler: Handles file uploads
     - DatasetLoader: Loads datasets from various sources
     - DatasetAnalyzer: Analyzes dataset structure and content
     - FormatConverter: Converts datasets to ChatML format
@@ -42,7 +41,7 @@ class DatasetService:
 
     Attributes:
         storage (StorageInterface): Interface for storage operations
-        uploader (DatasetUploader): Handles dataset uploads
+        uploader (DatasetHandler): Handles dataset uploads
         loader (DatasetLoader): Handles dataset loading
         analyzer (DatasetAnalyzer): Handles dataset analysis
         converter (FormatConverter): Handles format conversion
@@ -62,7 +61,7 @@ class DatasetService:
                 methods for storing and retrieving files.
         """
         self.storage = storage
-        self.uploader = DatasetUploader(storage)
+        self.handler = DatasetHandler(storage)
         self.loader = DatasetLoader(storage)
         self.analyzer = DatasetAnalyzer()
         self.converter = FormatConverter()
@@ -110,7 +109,7 @@ class DatasetService:
             ...     metadata={"description": "My dataset"}
             ... )
         """
-        return await self.uploader.upload_dataset(file_data, filename, metadata)
+        return await self.handler.upload_dataset(file_data, filename, metadata)
 
     async def analyze_dataset(
         self, dataset_source: str, dataset_id: str, sample_size: Optional[int] = None
@@ -329,81 +328,29 @@ class DatasetService:
             processed_id = str(uuid.uuid4())
 
             # Save all splits
-            return await self._save_dataset(processed_dataset, processed_id, dataset)
+            dataset_path = await self.handler.upload_processed_dataset(
+                processed_dataset, processed_id
+            )
+
+            splits = {}
+            for split_name, split_dataset in processed_dataset.items():
+                splits[split_name] = split_dataset.num_rows
+
+            sample_comparison = {
+                "original": dataset["train"][:1],
+                "processed": processed_dataset["train"][:1],
+            }
+
+            return ProcessingResult(
+                processed_dataset_id=processed_id,
+                dataset_path=dataset_path,
+                splits=splits,
+                sample_comparison=sample_comparison,
+            )
 
         except Exception as e:
             logger.error(f"Error processing dataset: {str(e)}")
             raise
-
-    async def _save_dataset(
-        self,
-        processed_dataset: Dict[str, List[Dict]],
-        processed_id: str,
-        original_dataset: Dict[str, List[Dict]],
-    ) -> ProcessingResult:
-        """
-        Save a processed dataset with all its splits.
-
-        This method:
-        1. Saves each split of the processed dataset to storage with appropriate suffixes
-        2. Returns processing results with information about all splits
-
-        Args:
-            processed_dataset (Dict[str, List[Dict]]): The processed dataset with splits
-            processed_id (str): Unique identifier for the processed dataset
-            original_dataset (Dict[str, List[Dict]]): The original dataset for comparison
-
-        Returns:
-            ProcessingResult: An object containing split information and paths
-
-        Example:
-            >>> result = await service._save_dataset(
-            ...     {"train": [...], "test": [...]},
-            ...     "processed_123",
-            ...     {"train": [...], "test": [...]}
-            ... )
-        """
-        splits_info = {}
-        total_processed_count = 0
-        total_original_count = 0
-
-        # Save each split
-        for split_name, split_data in processed_dataset.items():
-            total_processed_count += len(split_data)
-
-            # Create blob name with split suffix
-            blob_name = f"processed_datasets/{processed_id}_{split_name}.json"
-
-            # Upload split data
-            gcs_path = await self.storage.upload_data(split_data, blob_name)
-
-            # Store split information
-            splits_info[split_name] = {
-                "count": len(split_data),
-                "gcs_path": gcs_path,
-                "processed_count": len(split_data),
-            }
-
-        # Calculate total original count
-        for split_data in original_dataset.values():
-            total_original_count += len(split_data)
-
-        # Get sample comparison from train split only
-        train_split = processed_dataset.get("train", [])
-        original_train = original_dataset.get("train", [])
-
-        sample_comparison = {
-            "original": original_train[0] if original_train else None,
-            "processed": train_split[0] if train_split else None,
-        }
-
-        return ProcessingResult(
-            processed_dataset_id=processed_id,
-            original_count=total_original_count,
-            processed_count=total_processed_count,
-            splits=splits_info,
-            sample_comparison=sample_comparison,
-        )
 
     async def get_dataset_info(
         self, dataset_id: str, dataset_type: Optional[str] = None
@@ -514,47 +461,6 @@ class DatasetService:
 
         except Exception as e:
             logger.error(f"Error getting dataset info: {str(e)}")
-            raise
-
-    def validate_dataset(self, dataset: Dict[str, List[Dict]]) -> ValidationResponse:
-        """
-        Validate a dataset with splits in ChatML format.
-
-        This method performs comprehensive validation of the ChatML format for each split,
-        checking:
-        - Overall structure
-        - Message format
-        - Required fields
-        - Valid roles
-        - Presence of user and assistant messages
-
-        Args:
-            dataset (Dict[str, List[Dict]]): The dataset with splits to validate
-
-        Returns:
-            ValidationResponse: An object containing:
-                - is_valid (bool): Whether the entire dataset is valid
-                - errors (List[str]): List of validation errors across all splits
-                - warnings (List[str]): List of validation warnings across all splits
-                - total_samples (int): Total number of samples across all splits
-                - valid_samples (int): Number of valid samples across all splits
-
-        Example:
-            >>> validation = service.validate_dataset({"train": [...], "test": [...]})
-            >>> print(validation.is_valid)
-            True
-        """
-        try:
-            validation = self.converter.validate_chatml_format(dataset)
-            return ValidationResponse(
-                is_valid=validation["is_valid"],
-                errors=validation["errors"],
-                warnings=validation["warnings"],
-                total_samples=validation["total_samples"],
-                valid_samples=validation["valid_samples"],
-            )
-        except Exception as e:
-            logger.error(f"Error validating dataset: {str(e)}")
             raise
 
     def get_column_statistics(self, dataset: List[Dict], column: str) -> Dict[str, Any]:

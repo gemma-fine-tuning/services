@@ -1,12 +1,12 @@
 from .dataset_service import DatasetService
-from .dataset_uploader import DatasetUploader
+from .dataset_handler import DatasetHandler
 from .dataset_loader import DatasetLoader
 from .dataset_analyzer import DatasetAnalyzer
 from .format_converter import FormatConverter
 
 __all__ = [
     "DatasetService",
-    "DatasetUploader",
+    "DatasetHandler",
     "DatasetLoader",
     "DatasetAnalyzer",
     "FormatConverter",

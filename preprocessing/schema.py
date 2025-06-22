@@ -74,11 +74,8 @@ class PreprocessingRequest(BaseModel):
 
 class ProcessingResult(BaseModel):
     processed_dataset_id: str
-    original_count: int
-    processed_count: int
-    splits: Dict[
-        str, Dict[str, Any]
-    ]  # split_name -> {count, gcs_path, processed_count}
+    dataset_path: str
+    splits: Dict[str, int]  # split_name -> num_rows
     sample_comparison: Dict[str, Any]  # Only one sample from train split
 
 
