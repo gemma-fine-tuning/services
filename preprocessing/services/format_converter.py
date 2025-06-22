@@ -88,10 +88,9 @@ class FormatConverter:
 
             transformed_dataset = dataset.map(
                 self._convert_single_example,
-                config,
-                batched=True,
-                batch_size=8,
-                remove_columns=dataset.column_names,
+                fn_kwargs={"config": config},
+                batched=False,
+                remove_columns=dataset[next(iter(dataset))].column_names,
             )
             # Filter out failed conversions (empty dictionaries)
             transformed_dataset = transformed_dataset.filter(
