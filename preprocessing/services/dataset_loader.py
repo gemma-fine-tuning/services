@@ -1,9 +1,5 @@
-import json
-import io
 import logging
-import pandas as pd
-from typing import List, Dict
-from datasets import load_dataset
+from datasets import load_dataset, DatasetDict
 from storage.base import StorageInterface
 from schema import (
     PreprocessingConfig,
@@ -44,7 +40,7 @@ class DatasetLoader:
 
     async def load_dataset(
         self, dataset_source: str, dataset_id: str, config: PreprocessingConfig
-    ) -> List[Dict]:
+    ) -> DatasetDict:
         """
         Load a dataset from the specified source.
 
@@ -63,7 +59,7 @@ class DatasetLoader:
 
 
         Returns:
-            List[Dict]: A list of dictionaries containing the dataset samples.
+            DatasetDict: A dictionary with split names as keys and dataset samples as values.
 
         Raises:
             ValueError: If an invalid dataset_source is provided.
@@ -94,7 +90,7 @@ class DatasetLoader:
 
     async def _load_uploaded_dataset(
         self, dataset_id: str, config: PreprocessingConfig
-    ) -> Dict[str, List[Dict]]:
+    ) -> DatasetDict:
         """
         Load a dataset that was previously uploaded by the user.
 
@@ -109,7 +105,7 @@ class DatasetLoader:
             config (PreprocessingConfig): Configuration for processing, including split_config.
 
         Returns:
-            Dict[str, List[Dict]]: A dictionary with split names as keys and dataset samples as values.
+            DatasetDict: A dictionary with split names as keys and dataset samples as values.
 
         Raises:
             FileNotFoundError: If no file is found with the given dataset_id.
@@ -124,52 +120,74 @@ class DatasetLoader:
             raise FileNotFoundError("Uploaded dataset not found")
 
         file_path = files[0]
-        file_content = await self.storage.download_data(file_path)
-
         filename = file_path.split("_", 1)[1]
-        data = self._parse_file_content(file_content, filename)
+
+        # find the type of file
+        file_type = filename.split(".")[-1]
+        if (
+            file_type != "csv"
+            and file_type != "json"
+            and file_type != "jsonl"
+            and file_type != "parquet"
+            and file_type != "xlsx"
+            and file_type != "xls"
+            and file_type != "txt"
+        ):
+            raise ValueError("Invalid file type")
 
         # No split configuration - return all data as train split
         if isinstance(config.split_config, NoSplitConfig):
             sample_size = config.split_config.sample_size
-            if sample_size and len(data) > sample_size:
-                # Shuffle and sample the data
-                import random
+            dataset = load_dataset(file_type, data_files=file_path)
 
-                random.shuffle(data)
-                data = data[:sample_size]
-            return {"train": data}
+            if sample_size and dataset["train"].num_rows > sample_size:
+                shuffled_dataset = (
+                    dataset["train"].shuffle(seed=42).select(range(sample_size))
+                )
+                dataset = DatasetDict({"train": shuffled_dataset})
+
+            return dataset
 
         # Manual split configuration - sample and split into train/test
         elif isinstance(config.split_config, ManualSplitConfig):
             sample_size = config.split_config.sample_size
             test_size = config.split_config.test_size
 
-            if sample_size and len(data) > sample_size:
-                # Shuffle and sample the data
-                import random
+            dataset = load_dataset(file_type, data_files=file_path)
+            train_dataset = dataset["train"]
 
-                random.shuffle(data)
-                data = data[:sample_size]
+            # if sample_size and test_size are provided, sample and split into train/test
+            if sample_size and train_dataset.num_rows > sample_size and test_size:
+                train_size = int(sample_size * (1 - test_size))
+                shuffled_dataset = train_dataset.shuffle(seed=42)
+                train_split = shuffled_dataset.select(range(train_size))
+                test_split = shuffled_dataset.select(range(train_size, sample_size))
+                return DatasetDict({"train": train_split, "test": test_split})
 
-            # If no test_size provided, return all data as train split
-            if test_size is None:
-                return {"train": data}
+            # if sample_size is provided, sample the data
+            elif sample_size and train_dataset.num_rows > sample_size:
+                sampled_dataset = train_dataset.shuffle(seed=42).select(
+                    range(sample_size)
+                )
+                return DatasetDict({"train": sampled_dataset})
 
-            # Split into train/test
-            split_index = int(len(data) * (1 - test_size))
-            train_data = data[:split_index]
-            test_data = data[split_index:]
+            # if test_size is provided, split into train/test
+            elif test_size:
+                train_size = int(train_dataset.num_rows * (1 - test_size))
+                shuffled_dataset = train_dataset.shuffle(seed=42)
+                train_split = shuffled_dataset.select(range(train_size))
+                test_split = shuffled_dataset.select(
+                    range(train_size, train_dataset.num_rows)
+                )
+                return DatasetDict({"train": train_split, "test": test_split})
 
-            return {"train": train_data, "test": test_data}
-
-        # No split config provided - return all data as train split
-        else:
-            return {"train": data}
+            # if no sampling or splitting is specified, return all data as train
+            else:
+                return dataset
 
     async def _load_huggingface_dataset(
         self, dataset_name: str, config: PreprocessingConfig
-    ) -> Dict[str, List[Dict]]:
+    ) -> DatasetDict:
         """
         Load a dataset from Hugging Face's dataset hub.
 
@@ -183,7 +201,7 @@ class DatasetLoader:
             config (PreprocessingConfig): Configuration for processing, including split_config.
 
         Returns:
-            Dict[str, List[Dict]]: A dictionary with split names as keys and dataset samples as values.
+            DatasetDict: A dictionary with split names as keys and dataset samples as values.
 
         Raises:
             Exception: If there's an error loading the dataset from Hugging Face.
@@ -196,9 +214,9 @@ class DatasetLoader:
             if isinstance(config.split_config, NoSplitConfig):
                 dataset = load_dataset(dataset_name, split="train")
                 sample_size = config.split_config.sample_size
-                if sample_size and len(dataset) > sample_size:
-                    dataset = dataset.shuffle().select(range(sample_size))
-                return {"train": list(dataset)}
+                if sample_size and dataset.num_rows > sample_size:
+                    dataset = dataset.shuffle(seed=42).select(range(sample_size))
+                return DatasetDict({"train": dataset})
 
             # Manual split configuration - get train split, sample it, then split into train/test
             elif isinstance(config.split_config, ManualSplitConfig):
@@ -206,90 +224,50 @@ class DatasetLoader:
                 sample_size = config.split_config.sample_size
                 test_size = config.split_config.test_size
 
-                if sample_size and len(dataset) > sample_size:
-                    dataset = dataset.shuffle().select(range(sample_size))
+                # if sample_size and test_size are provided, sample and split into train/test
+                if sample_size and dataset.num_rows > sample_size and test_size:
+                    train_size = int(sample_size * (1 - test_size))
+                    shuffled_dataset = dataset.shuffle(seed=42)
+                    train_split = shuffled_dataset.select(range(train_size))
+                    test_split = shuffled_dataset.select(range(train_size, sample_size))
+                    return DatasetDict({"train": train_split, "test": test_split})
 
-                # Convert to list
-                dataset_list = list(dataset)
+                # if sample_size is provided, sample the data
+                elif sample_size and dataset.num_rows > sample_size:
+                    sampled_dataset = dataset.shuffle(seed=42).select(
+                        range(sample_size)
+                    )
+                    return DatasetDict({"train": sampled_dataset})
 
-                # If no test_size provided, return all data as train split
-                if test_size is None:
-                    return {"train": dataset_list}
+                # if test_size is provided, split into train/test
+                elif test_size:
+                    train_size = int(dataset.num_rows * (1 - test_size))
+                    shuffled_dataset = dataset.shuffle(seed=42)
+                    train_split = shuffled_dataset.select(range(train_size))
+                    test_split = shuffled_dataset.select(
+                        range(train_size, dataset.num_rows)
+                    )
+                    return DatasetDict({"train": train_split, "test": test_split})
 
-                # Split into train/test
-                split_index = int(len(dataset_list) * (1 - test_size))
-                train_data = dataset_list[:split_index]
-                test_data = dataset_list[split_index:]
-
-                return {"train": train_data, "test": test_data}
+                # if no sampling or splitting is specified, return all data as train
+                else:
+                    return DatasetDict({"train": dataset})
 
             # HF split configuration - get all specified splits
             elif isinstance(config.split_config, HFSplitConfig):
                 splits = config.split_config.splits
+
+                # if no splits are provided, return all splits
                 if not splits:
-                    # Default to train if no splits specified
-                    dataset = load_dataset(dataset_name, split="train")
-                    return {"train": list(dataset)}
+                    dataset = load_dataset(dataset_name)
+                    return dataset
+                else:
+                    dataset = load_dataset(dataset_name, split=splits)
+                    return dataset
 
-                dataset = {}
-                for split in splits:
-                    dataset[split] = list(load_dataset(dataset_name, split=split))
-                return dataset
-
-            # No split config provided - default to train split
             else:
-                dataset = load_dataset(dataset_name, split="train")
-                return {"train": list(dataset)}
+                raise ValueError("Invalid split configuration")
 
         except Exception as e:
             logger.error(f"Error loading Hugging Face dataset: {str(e)}")
             raise
-
-    def _parse_file_content(self, content: str, filename: str) -> List[Dict]:
-        """
-        Parse file content based on its extension.
-
-        This method supports parsing various file formats:
-        - CSV: Comma-separated values
-        - JSON: JavaScript Object Notation
-        - JSONL: JSON Lines format
-        - Excel: .xlsx and .xls files
-        - Parquet: Apache Parquet format
-        - Text: Plain text files
-
-        Args:
-            content (str): The raw content of the file.
-            filename (str): The name of the file, used to determine the file format.
-
-        Returns:
-            List[Dict]: A list of dictionaries containing the parsed data.
-
-        Raises:
-            ValueError: If the file format cannot be parsed.
-
-        Example:
-            >>> data = loader._parse_file_content(file_content, "data.csv")
-        """
-        try:
-            if filename.endswith(".csv"):
-                df = pd.read_csv(io.StringIO(content))
-                return df.to_dict("records")
-            elif filename.endswith(".json"):
-                return json.loads(content)
-            elif filename.endswith(".jsonl"):
-                return [
-                    json.loads(line)
-                    for line in content.strip().split("\n")
-                    if line.strip()
-                ]
-            elif filename.endswith((".xlsx", ".xls")):
-                df = pd.read_excel(io.BytesIO(content.encode()))
-                return df.to_dict("records")
-            elif filename.endswith(".parquet"):
-                df = pd.read_parquet(io.BytesIO(content.encode()))
-                return df.to_dict("records")
-            else:
-                return [{"text": content}]
-        except Exception as e:
-            logger.error(f"Error parsing file content: {str(e)}")
-            raise ValueError(f"Unable to parse file format: {filename}")
