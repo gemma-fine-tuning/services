@@ -19,7 +19,12 @@ class ModelConfig(BaseModel):
 class TrainRequest(BaseModel):
     # This struct is shared between the API and the backend service
     processed_dataset_id: str
+    # NOTE: This is marked optional for dev but in deployment it should be required
+    hf_token: Optional[str] = None
     model_config: ModelConfig
+    export: Literal["gcs", "hfhub"] = "gcs"
+    # If export is hfhub, this is the Hugging Face repo ID to push the model to
+    hf_repo_id: Optional[str] = None
 
 
 class TrainResponse(BaseModel):
@@ -29,6 +34,8 @@ class TrainResponse(BaseModel):
 
 
 class InferenceRequest(BaseModel):
+    hf_token: Optional[str] = None
+    adapter_path: str
     prompt: str
 
 

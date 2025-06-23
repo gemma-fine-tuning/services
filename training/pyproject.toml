@@ -15,4 +15,5 @@ dependencies = [
     "torch>=2.7.1",
     "transformers>=4.52.4",
     "trl==0.15.2",
+    "unsloth"
 ]

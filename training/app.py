@@ -20,15 +20,22 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",  # Add timestamps to logs
 )
 
-hf_token = os.environ.get("HUGGINGFACE_TOKEN")
-if hf_token:
-    login(token=hf_token)
-    logging.info("Logged into Hugging Face")
-else:
-    logging.warning("HUGGINGFACE_TOKEN not provided. Hugging Face login skipped.")
-
 # Training metrics will be available via REST API endpoints
 logging.info("✅ Training service ready")
+
+
+def login_hf(hf_token: str = None):
+    """
+    Login to Hugging Face.
+    For now we support env variable for dev but in prod we will just raise an error.
+    Login is required for pushing and pulling models since Gemma3 is a gated model.
+    """
+    token = hf_token or os.environ.get("HUGGINGFACE_TOKEN")
+    if token:
+        login(token=token)
+        logging.info("Logged into Hugging Face")
+    else:
+        logging.warning("HF Token not provided. Hugging Face login skipped.")
 
 
 @app.get("/health")
@@ -41,7 +48,12 @@ async def health_check():
 async def train(request: TrainRequest):
     """Start training with given configuration"""
     try:
-        # Use new simplified API to get appropriate training service
+        if request.export == "hfhub" and not request.hf_repo_id:
+            raise HTTPException(
+                status_code=400, detail="hf_repo_id is required for Hugging Face export"
+            )
+
+        login_hf(request.hf_token)
         training_service = TrainingService.from_provider(request.model_config.provider)
         return training_service.run_training(request)
     except Exception as e:
@@ -49,13 +61,19 @@ async def train(request: TrainRequest):
 
 
 @app.post("/inference/{job_id}", response_model=InferenceResponse)
-async def inference(job_id: str, payload: InferenceRequest):
+async def inference(job_id: str, request: InferenceRequest):
     """Run inference using a trained adapter"""
-    prompt = payload.prompt
+    prompt = request.prompt
     if not prompt:
         raise HTTPException(status_code=400, detail="prompt is required")
+
     try:
-        output = run_inference(job_id, prompt)
+        login_hf(request.hf_token)
+
+        # Determine storage type from job_id format (hfhub has "/" in repo names)
+        storage_type = "hfhub" if "/" in job_id else "gcs"
+
+        output = run_inference(job_id, prompt, storage_type)
         return {"result": output}
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Adapter not found")
