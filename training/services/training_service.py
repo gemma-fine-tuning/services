@@ -1,9 +1,7 @@
-import os
 import logging
 import torch
-import shutil
 from abc import ABC, abstractmethod
-from model_storage import storage_service, CloudStoredModelMetadata
+from model_storage import storage_service, StorageStrategyFactory
 from training.schema import TrainRequest, TrainResponse
 
 
@@ -41,6 +39,12 @@ class HuggingFaceTrainingService(BaseTrainingService):
         self.SFTTrainer = SFTTrainer
         self.SFTConfig = SFTConfig
 
+        # Determine dtype based on GPU capability
+        if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
+            self.torch_dtype = torch.bfloat16
+        else:
+            self.torch_dtype = torch.float16
+
     def run_training(self, req: TrainRequest) -> TrainResponse:
         """Orchestrate full training workflow and return result"""
         processed_dataset_id = req.processed_dataset_id
@@ -52,7 +56,9 @@ class HuggingFaceTrainingService(BaseTrainingService):
         )
 
         # Call core training logic
-        result = self._run_training_core(processed_dataset_id, model_cfg, job_id)
+        result = self._run_training_core(
+            processed_dataset_id, model_cfg, job_id, req.export, req.hf_repo_id
+        )
 
         return TrainResponse(
             job_id=job_id,
@@ -60,7 +66,9 @@ class HuggingFaceTrainingService(BaseTrainingService):
             model_id=result["model_id"],
         )
 
-    def _run_training_core(self, processed_dataset_id, model_config, job_id):
+    def _run_training_core(
+        self, processed_dataset_id, model_config, job_id, export, hf_repo_id=None
+    ):
         # 1. Download processed dataset
         train_dataset, eval_dataset = storage_service.download_processed_dataset(
             processed_dataset_id
@@ -96,38 +104,34 @@ class HuggingFaceTrainingService(BaseTrainingService):
         )
         trainer.train()
 
-        # 6. Save & upload adapter
-        adapter_path = f"/tmp/{job_id}_adapter"
-        trainer.save_model(adapter_path)
-
-        # Upload via storage manager
-        metadata = CloudStoredModelMetadata(
-            job_id=job_id,
-            model_id=model_config.get("model_id"),
-            gcs_prefix=f"trained_adapters/{job_id}",
-            use_unsloth=False,
-            local_dir=adapter_path,
+        # Use storage strategy to save model
+        storage_strategy = StorageStrategyFactory.create_strategy(
+            export, storage_service=storage_service
         )
-        adapter_gcs_path = storage_service.upload_model(adapter_path, metadata)
+        artifact = storage_strategy.save_model(
+            trainer,
+            tokenizer,
+            f"/tmp/{job_id}_adapter",
+            {
+                "job_id": job_id,
+                "model_id": model_config.get("model_id"),
+                "use_unsloth": False,
+                "hf_repo_id": hf_repo_id,
+            },
+        )
 
         # 7. Cleanup
-        shutil.rmtree(adapter_path, ignore_errors=True)
+        storage_strategy.cleanup(artifact)
         del model, trainer
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
         return {
-            "adapter_path": adapter_gcs_path,
-            "model_id": model_config.get("model_id"),
+            "adapter_path": artifact.remote_path,
+            "model_id": artifact.model_id,
         }
 
     def _setup_model(self, model_id, method):
-        # Determine dtype based on GPU capability
-        if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
-            torch_dtype = torch.bfloat16
-        else:
-            torch_dtype = torch.float16
-
         # Check supported models
         supported_models = [
             "google/gemma-3-1b-it",
@@ -142,7 +146,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
             )
 
         model_kwargs = {
-            "torch_dtype": torch_dtype,
+            "torch_dtype": self.torch_dtype,
             "attn_implementation": "eager",
             "device_map": "auto",
         }
@@ -153,7 +157,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
                 load_in_4bit=True,
                 bnb_4bit_use_double_quant=True,
                 bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=torch_dtype,
+                bnb_4bit_compute_dtype=self.torch_dtype,
             )
 
         model = self.AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
@@ -176,11 +180,12 @@ class HuggingFaceTrainingService(BaseTrainingService):
         )
 
     def _setup_training_args(self, model_config, job_id):
-        fp16 = True
-        bf16 = False
-        if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
-            fp16 = False
+        if self.torch_dtype == torch.bfloat16:
             bf16 = True
+            fp16 = False
+        else:
+            bf16 = False
+            fp16 = True
 
         return self.SFTConfig(
             output_dir=f"/tmp/{job_id}",
@@ -264,7 +269,9 @@ class UnslothTrainingService(BaseTrainingService):
         logging.info(f"Starting Unsloth training job {job_id} with model {model_id}")
 
         # Call core training logic
-        result = self._run_training_core(processed_dataset_id, model_cfg, job_id)
+        result = self._run_training_core(
+            processed_dataset_id, model_cfg, job_id, req.export, req.hf_repo_id
+        )
 
         return TrainResponse(
             job_id=job_id,
@@ -272,7 +279,9 @@ class UnslothTrainingService(BaseTrainingService):
             model_id=result["model_id"],
         )
 
-    def _run_training_core(self, processed_dataset_id, model_config, job_id):
+    def _run_training_core(
+        self, processed_dataset_id, model_config, job_id, export, hf_repo_id=None
+    ):
         # 1. Download processed dataset
         train_dataset, eval_dataset = storage_service.download_processed_dataset(
             processed_dataset_id
@@ -315,37 +324,35 @@ class UnslothTrainingService(BaseTrainingService):
 
         trainer.train()
 
-        # 6. Save & upload adapter with Unsloth flag
-        adapter_path = f"/tmp/{job_id}_adapter"
-        model.save_pretrained(adapter_path)
-        tokenizer.save_pretrained(adapter_path)
-
-        # Upload via storage manager with Unsloth flag
-        metadata = CloudStoredModelMetadata(
-            job_id=job_id,
-            model_id=model_config.get("model_id"),
-            gcs_prefix=f"trained_adapters/{job_id}",
-            use_unsloth=True,  # Mark as Unsloth model
-            local_dir=adapter_path,
+        # Use storage strategy to save model
+        storage_strategy = StorageStrategyFactory.create_strategy(
+            export, storage_service=storage_service
         )
-        adapter_gcs_path = storage_service.upload_model(adapter_path, metadata)
+        artifact = storage_strategy.save_model(
+            model,
+            tokenizer,
+            f"/tmp/{job_id}_adapter",
+            {
+                "job_id": job_id,
+                "model_id": model_config.get("model_id"),
+                "use_unsloth": True,
+                "hf_repo_id": hf_repo_id,
+            },
+        )
 
         # 7. Cleanup
-        shutil.rmtree(adapter_path, ignore_errors=True)
+        storage_strategy.cleanup(artifact)
         del model, trainer
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
         return {
-            "adapter_path": adapter_gcs_path,
-            "model_id": model_config.get("model_id"),
+            "adapter_path": artifact.remote_path,
+            "model_id": artifact.model_id,
         }
 
     def _setup_unsloth_model(self, model_id, model_config):
         """Setup Unsloth model and tokenizer"""
-        # TODO: This sounds like a dangerous use of environment variables, prone to breaking software
-        # NOTE: Considering passing this in as a parameter or storing it somewhere
-        hf_token = os.environ.get("HUGGINGFACE_TOKEN")
 
         # Load base model with Unsloth
         model, tokenizer = self.FastModel.from_pretrained(
@@ -354,7 +361,6 @@ class UnslothTrainingService(BaseTrainingService):
             load_in_4bit=True,
             load_in_8bit=False,
             full_finetuning=False,
-            token=hf_token,
         )
 
         # Apply PEFT with Unsloth

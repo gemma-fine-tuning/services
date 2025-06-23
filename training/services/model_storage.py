@@ -1,10 +1,12 @@
 import os
 import json
-from typing import Optional
+from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from google.cloud import storage
 from datasets import Dataset
 import logging
+from abc import ABC, abstractmethod
+import shutil
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -19,7 +21,7 @@ class CloudStoredModelMetadata:
     local_dir: str = None  # Local path where artifacts are downloaded
 
 
-class ModelStorageService:
+class CloudStorageService:
     """
     Service for managing artifacts in Google Cloud Storage (GCS).
     This is used for **BOTH** dataset retrieval and model artifact storage.
@@ -151,7 +153,209 @@ class ModelStorageService:
         return train_dataset, eval_dataset
 
 
+@dataclass
+class ModelArtifact:
+    """Unified representation of model artifacts regardless of storage backend"""
+
+    model_id: str
+    job_id: str
+    local_path: str
+    remote_path: str
+    use_unsloth: bool = False
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class ModelStorageStrategy(ABC):
+    """Abstract base strategy for model storage operations"""
+
+    @abstractmethod
+    def save_model(
+        self, model, tokenizer, local_path: str, metadata: Dict[str, Any]
+    ) -> ModelArtifact:
+        """Save model artifacts and return artifact reference"""
+        pass
+
+    @abstractmethod
+    def load_model_info(self, artifact_id: str) -> ModelArtifact:
+        """Load model metadata and prepare for inference"""
+        pass
+
+    @abstractmethod
+    def cleanup(self, artifact: ModelArtifact) -> None:
+        """Clean up local resources"""
+        pass
+
+
+class GCSStorageStrategy(ModelStorageStrategy):
+    """Google Cloud Storage implementation"""
+
+    def __init__(self, storage_service):
+        self.storage_service = storage_service
+
+    def save_model(
+        self, model, tokenizer, local_path: str, metadata: Dict[str, Any]
+    ) -> ModelArtifact:
+        """Save model to GCS and return artifact reference"""
+        # Use existing storage service logic
+        from training.services.model_storage import CloudStoredModelMetadata
+
+        cloud_metadata = CloudStoredModelMetadata(
+            job_id=metadata["job_id"],
+            model_id=metadata["model_id"],
+            gcs_prefix=f"trained_adapters/{metadata['job_id']}",
+            use_unsloth=metadata.get("use_unsloth", False),
+            local_dir=local_path,
+        )
+
+        # Save model locally first
+        if hasattr(model, "save_pretrained"):
+            model.save_pretrained(local_path)
+        else:
+            # For trainers
+            model.save_model(local_path)
+        tokenizer.save_pretrained(local_path)
+
+        # Upload to GCS
+        remote_path = self.storage_service.upload_model(local_path, cloud_metadata)
+
+        return ModelArtifact(
+            model_id=metadata["model_id"],
+            job_id=metadata["job_id"],
+            local_path=local_path,
+            remote_path=remote_path,
+            use_unsloth=metadata.get("use_unsloth", False),
+            metadata=metadata,
+        )
+
+    def load_model_info(self, job_id: str) -> ModelArtifact:
+        """Load model from GCS"""
+        meta = self.storage_service.download_model(job_id)
+
+        return ModelArtifact(
+            model_id=meta.model_id,
+            job_id=meta.job_id,
+            local_path=meta.local_dir,
+            remote_path=f"gs://{self.storage_service.export_bucket}/{meta.gcs_prefix}/",
+            use_unsloth=meta.use_unsloth,
+            metadata={"gcs_prefix": meta.gcs_prefix},
+        )
+
+    def cleanup(self, artifact: ModelArtifact) -> None:
+        """Clean up local GCS artifacts"""
+        if artifact.local_path and os.path.exists(artifact.local_path):
+            shutil.rmtree(artifact.local_path, ignore_errors=True)
+
+
+class HuggingFaceHubStrategy(ModelStorageStrategy):
+    """HuggingFace Hub storage implementation"""
+
+    def __init__(self):
+        pass
+
+    def save_model(
+        self, model, tokenizer, local_path: str, metadata: Dict[str, Any]
+    ) -> ModelArtifact:
+        """Push model to HuggingFace Hub"""
+        hf_repo_id = metadata["hf_repo_id"]
+
+        # Save locally first (optional, for consistency)
+        if hasattr(model, "save_pretrained"):
+            model.save_pretrained(local_path)
+        else:
+            model.save_model(local_path)
+        tokenizer.save_pretrained(local_path)
+
+        # Push to HuggingFace Hub
+        logging.info(f"Pushing model to Hugging Face Hub at {hf_repo_id}")
+
+        if hasattr(model, "push_to_hub"):
+            # Direct model push (for Unsloth/base models)
+            model.push_to_hub(repo_id=hf_repo_id, private=True)
+        else:
+            # For trainers, get the model first
+            model.model.push_to_hub(repo_id=hf_repo_id, private=True)
+
+        tokenizer.push_to_hub(hf_repo_id)
+
+        # Save additional metadata
+        training_config = {
+            "model_id": metadata["model_id"],
+            "use_unsloth": metadata.get("use_unsloth", False),
+            "job_id": metadata["job_id"],
+        }
+
+        # Upload training config to HF Hub for inference
+        config_path = os.path.join(local_path, "adapter_training_config.json")
+        with open(config_path, "w") as f:
+            json.dump(training_config, f)
+
+        return ModelArtifact(
+            model_id=metadata["model_id"],
+            job_id=metadata["job_id"],
+            local_path=local_path,
+            remote_path=hf_repo_id,
+            use_unsloth=metadata.get("use_unsloth", False),
+            metadata={"hf_repo_id": hf_repo_id},
+        )
+
+    def load_model_info(self, repo_id: str) -> ModelArtifact:
+        """Load model info from HuggingFace Hub"""
+        from huggingface_hub import hf_hub_download
+
+        try:
+            # Try adapter config first
+            adapter_config_path = hf_hub_download(
+                repo_id=repo_id, filename="adapter_config.json"
+            )
+            with open(adapter_config_path, "r") as f:
+                adapter_config = json.load(f)
+            base_model_id = adapter_config.get("base_model_name_or_path", repo_id)
+            use_unsloth = True if base_model_id.startswith("unsloth/") else False
+        except Exception:
+            logging.warning(
+                f"Failed to load adapter config for {repo_id}, falling back to repo_id as model_id"
+            )
+
+        return ModelArtifact(
+            model_id=base_model_id,
+            job_id=repo_id,  # Use repo_id as job_id for HF Hub
+            local_path="",  # No local path for HF Hub
+            remote_path=repo_id,
+            use_unsloth=use_unsloth,
+            metadata={"hf_repo_id": repo_id},
+        )
+
+    def cleanup(self, artifact: ModelArtifact) -> None:
+        """
+        No local artifacts to clean up for HuggingFace Hub.
+        This method is required as abstract method but does nothing
+        """
+        pass  # No local artifacts to clean up for HF Hub
+
+
+class StorageStrategyFactory:
+    """
+    Factory for creating storage strategies
+
+    Example:
+    ```python
+    storage_strategy = StorageStrategyFactory.create_strategy("gcs", storage_service=storage_service)
+    artifact = storage_strategy.save_model(model, tokenizer, local_path, metadata)
+    ```
+    """
+
+    @staticmethod
+    def create_strategy(storage_type: str, **kwargs) -> ModelStorageStrategy:
+        """Create appropriate storage strategy"""
+        if storage_type == "gcs":
+            return GCSStorageStrategy(kwargs.get("storage_service"))
+        elif storage_type == "hfhub":
+            return HuggingFaceHubStrategy()
+        else:
+            raise ValueError(f"Unknown storage type: {storage_type}")
+
+
 # default model storage service instance
 data_bucket = os.environ.get("GCS_DATA_BUCKET_NAME", "gemma-dataset-dev")
 export_bucket = os.environ.get("GCS_EXPORT_BUCKET_NAME", "gemma-export-dev")
-storage_service = ModelStorageService(storage.Client(), data_bucket, export_bucket)
+storage_service = CloudStorageService(storage.Client(), data_bucket, export_bucket)
