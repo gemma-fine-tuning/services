@@ -1,0 +1,29 @@
+# Cloud Build configuration for training service
+# Usage: gcloud builds submit --config cloudbuild.yaml --substitutions=KEY=VALUE .
+
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      [
+        "build",
+        "-t",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/preprocessing-service:latest",
+        ".",
+      ]
+
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      [
+        "push",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/preprocessing-service:latest",
+      ]
+
+options:
+  machineType: "E2_HIGHCPU_32"
+  diskSizeGb: 100
+
+timeout: "1200"
+
+# Images to be pushed to registry
+images:
+  - "us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/preprocessing-service:latest"
