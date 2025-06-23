@@ -1,8 +1,9 @@
 import logging
 import torch
+import os
 from abc import ABC, abstractmethod
 from model_storage import storage_service, StorageStrategyFactory
-from training.schema import TrainRequest, TrainResponse
+from training.schema import TrainRequest, TrainResponse, WandbConfig
 
 
 class BaseTrainingService(ABC):
@@ -20,6 +21,27 @@ class BaseTrainingService(ABC):
             TrainResponse: Training result with job_id, adapter_path, and model_id
         """
         pass
+
+    def _setup_wandb(self, config: WandbConfig) -> str:
+        """
+        Setup wandb environment variables and return report_to value
+        This function can be expanded to support other logging frameworks like tensorboard in the future.
+        """
+        if not config:
+            return "none"
+
+        if not config.api_key:
+            logging.warning(
+                "WandB config provided but no API key set. WandB logging will be disabled."
+            )
+            return "none"
+
+        if config.project:
+            os.environ["WANDB_PROJECT"] = config.project
+        if config.log_model:
+            os.environ["WANDB_LOG_MODEL"] = config.log_model
+
+        return "wandb"
 
 
 class HuggingFaceTrainingService(BaseTrainingService):
@@ -47,6 +69,9 @@ class HuggingFaceTrainingService(BaseTrainingService):
 
     def run_training(self, req: TrainRequest) -> TrainResponse:
         """Orchestrate full training workflow and return result"""
+        # Setup wandb if configured
+        report_to = self._setup_wandb(req.wandb_config)
+
         processed_dataset_id = req.processed_dataset_id
         model_cfg = req.model_config.dict()
         model_id = model_cfg.get("model_id")
@@ -57,7 +82,12 @@ class HuggingFaceTrainingService(BaseTrainingService):
 
         # Call core training logic
         result = self._run_training_core(
-            processed_dataset_id, model_cfg, job_id, req.export, req.hf_repo_id
+            processed_dataset_id,
+            model_cfg,
+            job_id,
+            req.export,
+            req.hf_repo_id,
+            report_to,
         )
 
         return TrainResponse(
@@ -67,7 +97,13 @@ class HuggingFaceTrainingService(BaseTrainingService):
         )
 
     def _run_training_core(
-        self, processed_dataset_id, model_config, job_id, export, hf_repo_id=None
+        self,
+        processed_dataset_id,
+        model_config,
+        job_id,
+        export,
+        hf_repo_id=None,
+        report_to="none",
     ):
         # 1. Download processed dataset
         train_dataset, eval_dataset = storage_service.download_processed_dataset(
@@ -90,7 +126,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
         peft_config = self._setup_lora_config(model_config)
 
         # 5. Setup training args
-        training_args = self._setup_training_args(model_config, job_id)
+        training_args = self._setup_training_args(model_config, job_id, report_to)
 
         # 6. Train
         torch.cuda.empty_cache()
@@ -179,7 +215,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
             modules_to_save=["lm_head", "embed_tokens"],
         )
 
-    def _setup_training_args(self, model_config, job_id):
+    def _setup_training_args(self, model_config, job_id, report_to="none"):
         if self.torch_dtype == torch.bfloat16:
             bf16 = True
             fp16 = False
@@ -203,7 +239,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
             logging_steps=10,
             save_strategy="epoch",
             push_to_hub=False,
-            report_to="none",
+            report_to=report_to,
         )
 
     def _prepare_hf_dataset(self, dataset, tokenizer):
@@ -262,6 +298,9 @@ class UnslothTrainingService(BaseTrainingService):
 
     def run_training(self, req: TrainRequest) -> TrainResponse:
         """Orchestrate full Unsloth training workflow and return result"""
+        # Setup wandb if configured
+        report_to = self._setup_wandb(req.wandb_config)
+
         processed_dataset_id = req.processed_dataset_id
         model_cfg = req.model_config.dict()
         model_id = model_cfg.get("model_id")
@@ -270,7 +309,12 @@ class UnslothTrainingService(BaseTrainingService):
 
         # Call core training logic
         result = self._run_training_core(
-            processed_dataset_id, model_cfg, job_id, req.export, req.hf_repo_id
+            processed_dataset_id,
+            model_cfg,
+            job_id,
+            req.export,
+            req.hf_repo_id,
+            report_to,
         )
 
         return TrainResponse(
@@ -280,7 +324,13 @@ class UnslothTrainingService(BaseTrainingService):
         )
 
     def _run_training_core(
-        self, processed_dataset_id, model_config, job_id, export, hf_repo_id=None
+        self,
+        processed_dataset_id,
+        model_config,
+        job_id,
+        export,
+        hf_repo_id=None,
+        report_to="none",
     ):
         # 1. Download processed dataset
         train_dataset, eval_dataset = storage_service.download_processed_dataset(
@@ -303,7 +353,9 @@ class UnslothTrainingService(BaseTrainingService):
             )
 
         # 4. Setup training args
-        training_args = self._setup_unsloth_training_args(model_config, job_id)
+        training_args = self._setup_unsloth_training_args(
+            model_config, job_id, report_to
+        )
 
         # 5. Train with Unsloth
         torch.cuda.empty_cache()
@@ -408,7 +460,7 @@ class UnslothTrainingService(BaseTrainingService):
         dataset = dataset.map(formatting_prompts_func, batched=True)
         return dataset
 
-    def _setup_unsloth_training_args(self, model_config, job_id):
+    def _setup_unsloth_training_args(self, model_config, job_id, report_to="none"):
         """Setup training arguments for Unsloth"""
         return self.SFTConfig(
             dataset_text_field="text",
@@ -425,7 +477,7 @@ class UnslothTrainingService(BaseTrainingService):
             weight_decay=0.01,
             lr_scheduler_type="linear",
             seed=3407,
-            report_to="none",
+            report_to=report_to,
             dataset_num_proc=2,
         )
 
