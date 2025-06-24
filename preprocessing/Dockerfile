@@ -23,4 +23,4 @@ COPY . .
 EXPOSE 8080
 
 # Run the application with gunicorn
-CMD ["uv", "run", "gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--timeout", "120", "app:app"]
+CMD ["uv", "run", "app.py"]

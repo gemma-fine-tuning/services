@@ -28,6 +28,8 @@ steps:
         "--platform=managed",
         "--region=us-central1",
         "--allow-unauthenticated",
+        "--memory=8Gi",
+        "--cpu=2",
         "--set-env-vars=STORAGE_TYPE=gcs,GCS_DATA_BUCKET_NAME=${_GCS_DATA_BUCKET_NAME}",
       ]
 
