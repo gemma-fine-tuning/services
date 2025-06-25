@@ -3,7 +3,7 @@ from typing import Literal, Optional
 
 
 class TrainingConfig(BaseModel):
-    method: Literal["LoRA", "QLoRA", "RL"]
+    method: Literal["Full", "LoRA", "QLoRA", "RL"]
     base_model_id: str
     lora_rank: Optional[int]
     lora_alpha: Optional[int]
@@ -14,8 +14,10 @@ class TrainingConfig(BaseModel):
     batch_size: int = 4
     epochs: int
     # Default this to -1 instead of None to avoid operator errors
-    max_steps: int = -1
-    max_seq_length: int
+    max_steps: Optional[int] = -1
+    max_length: Optional[int]  # used when packing sequences
+    max_seq_length: Optional[int]  # used to load pretrained models
+    packing: bool = True  # whether to pack sequences for training
     gradient_accumulation_steps: int
     use_fa2: bool = False  # FA2 is only available when provider is "huggingface"
     provider: Literal["unsloth", "huggingface"] = "huggingface"

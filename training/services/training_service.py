@@ -57,7 +57,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
             BitsAndBytesConfig,
             AutoModelForImageTextToText,
         )
-        from peft import LoraConfig
+        from peft import LoraConfig, get_peft_model
         from trl import SFTTrainer, SFTConfig
 
         # Store imports as instance variables to avoid namespace pollution
@@ -68,6 +68,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
         self.LoraConfig = LoraConfig
         self.SFTTrainer = SFTTrainer
         self.SFTConfig = SFTConfig
+        self.get_peft_model = get_peft_model
 
         # Determine dtype based on GPU capability
         if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
@@ -140,7 +141,14 @@ class HuggingFaceTrainingService(BaseTrainingService):
             prepared_eval_dataset = self._prepare_hf_dataset(eval_dataset, tokenizer)
 
         # 4. Setup LoRA config
-        peft_config = self._setup_lora_config(model_config)
+        # We wrap the model with PEFT as long as the method is not specified as full fine tuning
+        if model_config.get("method", "LoRA") != "Full":
+            model = self._setup_peft_with_lora(model, model_config)
+            print(model.print_trainable_parameters())
+        else:
+            logging.info(
+                "Full fine-tuning selected, not applying LoRA or QLoRA. This will be slow and might result in GPU OOM"
+            )
 
         # 5. Setup training args
         training_args = self._setup_training_args(model_config, job_id, report_to)
@@ -161,7 +169,6 @@ class HuggingFaceTrainingService(BaseTrainingService):
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=prepared_eval_dataset,
-            peft_config=peft_config,
             processing_class=tokenizer,
         )
         trainer.train()
@@ -228,7 +235,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
             )
         else:
             # For multimodal models, use AutoModelForImageTextToText
-            model = self.AutomodelForImageTextToText.from_pretrained(
+            model = self.AutoModelForImageTextToText.from_pretrained(
                 base_model_id, **model_kwargs
             )
         tokenizer = self.AutoTokenizer.from_pretrained(base_model_id)
@@ -238,8 +245,9 @@ class HuggingFaceTrainingService(BaseTrainingService):
 
         return model, tokenizer
 
-    def _setup_lora_config(self, model_config):
-        return self.LoraConfig(
+    def _setup_peft_with_lora(self, model, model_config):
+        """Setup PEFT with LoRA configuration for the model"""
+        lora_config = self.LoraConfig(
             lora_alpha=model_config.get("lora_alpha", 16),
             lora_dropout=model_config.get("lora_dropout", 0.05),
             r=model_config.get("lora_rank", 16),
@@ -249,7 +257,10 @@ class HuggingFaceTrainingService(BaseTrainingService):
             modules_to_save=["lm_head", "embed_tokens"],
         )
 
+        return self.get_peft_model(model, lora_config)
+
     def _setup_training_args(self, model_config, job_id, report_to="none"):
+        """Setup training arguments for SFTTrainer."""
         if self.torch_dtype == torch.bfloat16:
             bf16 = True
             fp16 = False
@@ -265,25 +276,30 @@ class HuggingFaceTrainingService(BaseTrainingService):
 
         return self.SFTConfig(
             output_dir=f"/tmp/{job_id}",
-            max_seq_length=model_config.get("max_seq_length", 512),
-            num_train_epochs=model_config.get("epochs", 3),
-            # using max_steps will directly override num_train_epochs
-            max_steps=model_config.get("max_steps", -1),  # -1 means no max steps
             # Batch size on each GPU if multiple GPUs are used, for simplicity we use same batch size for train and eval
-            per_device_train_batch_size=model_config.get("batch_size", 8),
-            per_device_eval_batch_size=model_config.get("batch_size", 8),
+            per_device_train_batch_size=model_config.get("batch_size", 4),
+            per_device_eval_batch_size=model_config.get("batch_size", 4),
             # Do forward pass multiple times before updating weights
             gradient_accumulation_steps=model_config.get(
                 "gradient_accumulation_steps", 4
             ),
+            warmup_steps=5,
+            # This is the max seq length of the prompt
+            num_train_epochs=model_config.get("epochs", 3),
+            # using max_steps will directly override num_train_epochs
+            max_steps=model_config.get("max_steps", -1),  # -1 means no max steps
             learning_rate=model_config.get("learning_rate", 2e-4),
-            packing=True,
-            optim="adamw_torch_fused",
+            # Packing packs the tokenized sequences to max_len
+            max_length=model_config.get("max_length", 1024),
+            packing=model_config.get("packing", True),
             fp16=fp16,
             bf16=bf16,
-            logging_steps=10,
+            optim="adamw_torch_fused",
+            lr_scheduler_type="linear",
+            weight_decay=0.01,
             save_strategy="epoch",
             push_to_hub=False,
+            logging_steps=10,
             report_to=report_to,
         )
 
@@ -342,6 +358,11 @@ class UnslothTrainingService(BaseTrainingService):
             "unsloth/gemma-3-12b-it-unsloth-bnb-4bit",
             "unsloth/gemma-3-27b-it-unsloth-bnb-4bit",
         ]
+
+        if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
+            self.torch_dtype = torch.bfloat16
+        else:
+            self.torch_dtype = torch.float16
 
     def run_training(self, req: TrainRequest) -> TrainResponse:
         """Orchestrate full Unsloth training workflow and return result"""
@@ -464,27 +485,35 @@ class UnslothTrainingService(BaseTrainingService):
         """Setup Unsloth model and tokenizer"""
 
         # Load base model with Unsloth
+        # NOTE: Since we used 4 bit bnb for HF QLoRA training we keep it consistent here
         model, tokenizer = self.FastModel.from_pretrained(
             model_name=base_model_id,
             max_seq_length=model_config.get("max_seq_length", 2048),
-            load_in_4bit=True,
+            load_in_4bit=True,  # This is quantized by default
             load_in_8bit=False,
-            full_finetuning=False,
+            full_finetuning=True
+            if model_config.get("method", "LoRA") == "Full"
+            else False,
         )
 
-        # Apply PEFT with Unsloth
-        model = self.FastModel.get_peft_model(
-            model,
-            finetune_vision_layers=False,  # turn off since we're just doing text right now
-            finetune_language_layers=True,  # optionally on or off
-            finetune_attention_modules=False,  # this is helpful for GRPO, not PEFT use cases
-            finetune_mlp_modules=True,  # should always be on according to docs
-            r=model_config.get("lora_rank", 8),
-            lora_alpha=model_config.get("lora_alpha", 8),
-            lora_dropout=model_config.get("lora_dropout", 0.0),
-            bias="none",
-            random_state=3407,
-        )
+        if model_config.get("method", "LoRA") != "Full":
+            # Apply PEFT with Unsloth
+            model = self.FastModel.get_peft_model(
+                model,
+                finetune_vision_layers=False,  # turn off since we're just doing text right now
+                finetune_language_layers=False,  # optionally on or off
+                finetune_attention_modules=False,  # Attention good for GRPO and improves training efficiency
+                finetune_mlp_modules=True,  # should always be on according to docs
+                r=model_config.get("lora_rank", 8),
+                lora_alpha=model_config.get("lora_alpha", 8),
+                lora_dropout=model_config.get("lora_dropout", 0.0),
+                bias="none",
+                random_state=3407,
+            )
+        else:
+            logging.info(
+                "Full fine-tuning selected, not applying LoRA. This will be slow and might result in GPU OOM"
+            )
 
         # Setup chat template
         tokenizer = self.get_chat_template(
@@ -506,7 +535,16 @@ class UnslothTrainingService(BaseTrainingService):
         def formatting_prompts_func(examples):
             # examples["messages"] is a batch of message arrays -> we expect this to be well formatted in preprocessing
             # each convo is a list of message dicts: [{"role": "user", "content": "..."}, ...]
-            convos = examples["messages"]
+            # Handle both "messages" and "conversations" field names for compatibility
+            if "messages" in examples:
+                convos = examples["messages"]
+            elif "conversations" in examples:
+                convos = examples["conversations"]
+            else:
+                raise ValueError(
+                    "Dataset must contain either 'messages' or 'conversations' field"
+                )
+
             texts = [
                 tokenizer.apply_chat_template(
                     convo, tokenize=False, add_generation_prompt=False
@@ -520,25 +558,35 @@ class UnslothTrainingService(BaseTrainingService):
 
     def _setup_unsloth_training_args(self, model_config, job_id, report_to="none"):
         """Setup training arguments for Unsloth"""
+        if self.torch_dtype == torch.bfloat16:
+            bf16 = True
+            fp16 = False
+        else:
+            bf16 = False
+            fp16 = True
+
         return self.SFTConfig(
             dataset_text_field="text",  # this matches with the field created in _prepare_unsloth_dataset
             output_dir=f"/tmp/{job_id}",
-            per_device_train_batch_size=model_config.get("batch_size", 2),
-            per_device_eval_batch_size=model_config.get("batch_size", 2),
+            per_device_train_batch_size=model_config.get("batch_size", 4),
+            per_device_eval_batch_size=model_config.get("batch_size", 4),
             gradient_accumulation_steps=model_config.get(
                 "gradient_accumulation_steps", 4
             ),
             warmup_steps=5,
-            num_train_epochs=model_config.get("epochs", 1),
-            max_steps=model_config.get("max_steps", -1),  # -1 means no max steps
+            num_train_epochs=model_config.get("epochs", 3),
+            max_steps=model_config.get("max_steps", -1),
             learning_rate=model_config.get("learning_rate", 2e-4),
-            logging_steps=1,
+            max_length=model_config.get("max_length", 1024),
+            packing=model_config.get("packing", True),
+            fp16=fp16,
+            bf16=bf16,
             optim="adamw_8bit",
-            weight_decay=0.01,
             lr_scheduler_type="linear",
-            seed=3407,
+            weight_decay=0.01,
+            save_strategy="epoch",
+            logging_steps=10,
             report_to=report_to,
-            dataset_num_proc=2,
         )
 
 
