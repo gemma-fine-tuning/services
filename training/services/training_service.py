@@ -2,8 +2,8 @@ import logging
 import torch
 import os
 from abc import ABC, abstractmethod
-from model_storage import storage_service, StorageStrategyFactory
-from training.schema import TrainRequest, TrainResponse, WandbConfig
+from .model_storage import storage_service, StorageStrategyFactory
+from schema import TrainRequest, TrainResponse, WandbConfig
 
 
 class BaseTrainingService(ABC):
@@ -18,7 +18,7 @@ class BaseTrainingService(ABC):
             res: `TrainRequest` containing model config and dataset info
 
         Returns:
-            TrainResponse: Training result with job_id, adapter_path, and model_id
+            TrainResponse: Training result with job_id, adapter_path, and base_model_id
         """
         pass
 
@@ -36,6 +36,8 @@ class BaseTrainingService(ABC):
             )
             return "none"
 
+        os.environ["WANDB_API_KEY"] = config.api_key
+
         if config.project:
             os.environ["WANDB_PROJECT"] = config.project
         if config.log_model:
@@ -49,7 +51,12 @@ class HuggingFaceTrainingService(BaseTrainingService):
 
     def __init__(self):
         # Import HF libraries only when this service is instantiated
-        from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+        from transformers import (
+            AutoTokenizer,
+            AutoModelForCausalLM,
+            BitsAndBytesConfig,
+            AutoModelForImageTextToText,
+        )
         from peft import LoraConfig
         from trl import SFTTrainer, SFTConfig
 
@@ -57,6 +64,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
         self.AutoTokenizer = AutoTokenizer
         self.AutoModelForCausalLM = AutoModelForCausalLM
         self.BitsAndBytesConfig = BitsAndBytesConfig
+        self.AutoModelForImageTextToText = AutoModelForImageTextToText
         self.LoraConfig = LoraConfig
         self.SFTTrainer = SFTTrainer
         self.SFTConfig = SFTConfig
@@ -69,32 +77,40 @@ class HuggingFaceTrainingService(BaseTrainingService):
 
     def run_training(self, req: TrainRequest) -> TrainResponse:
         """Orchestrate full training workflow and return result"""
-        # Setup wandb if configured
-        report_to = self._setup_wandb(req.wandb_config)
+        try:
+            # Setup wandb if configured
+            report_to = self._setup_wandb(req.wandb_config)
 
-        processed_dataset_id = req.processed_dataset_id
-        model_cfg = req.model_config.dict()
-        model_id = model_cfg.get("model_id")
-        job_id = f"training_{processed_dataset_id}_{model_id.split('/')[-1]}"
-        logging.info(
-            f"Starting HuggingFace training job {job_id} with model {model_id}"
-        )
+            processed_dataset_id = req.processed_dataset_id
+            model_cfg = req.training_config.dict()
+            base_model_id = model_cfg.get("base_model_id")
+            job_id = f"training_{processed_dataset_id}_{base_model_id.split('/')[-1]}"
 
-        # Call core training logic
-        result = self._run_training_core(
-            processed_dataset_id,
-            model_cfg,
-            job_id,
-            req.export,
-            req.hf_repo_id,
-            report_to,
-        )
+            logging.info(
+                f"Starting HuggingFace training job {job_id} with model {base_model_id}"
+            )
+            logging.info(f"Training config: {model_cfg}")
+            logging.info(f"Export type: {req.export}")
 
-        return TrainResponse(
-            job_id=job_id,
-            adapter_path=result["adapter_path"],
-            model_id=result["model_id"],
-        )
+            # Call core training logic
+            result = self._run_training_core(
+                processed_dataset_id,
+                model_cfg,
+                job_id,
+                req.export,
+                req.hf_repo_id,
+                report_to,
+            )
+
+            logging.info(f"Training completed successfully for job {job_id}")
+            return TrainResponse(
+                job_id=job_id,
+                adapter_path=result["adapter_path"],
+                base_model_id=result["base_model_id"],
+            )
+        except Exception as e:
+            logging.error(f"HuggingFace training failed: {str(e)}", exc_info=True)
+            raise e
 
     def _run_training_core(
         self,
@@ -112,8 +128,9 @@ class HuggingFaceTrainingService(BaseTrainingService):
 
         # 2. Setup model and tokenizer
         model, tokenizer = self._setup_model(
-            model_config.get("model_id", "google/gemma-3-1b-it"),
+            model_config.get("base_model_id", "google/gemma-3-1b-it"),
             model_config.get("method", "LoRA"),
+            model_config.get("use_fa2", True),
         )
 
         # 3. Prepare datasets for HuggingFace training format
@@ -129,7 +146,16 @@ class HuggingFaceTrainingService(BaseTrainingService):
         training_args = self._setup_training_args(model_config, job_id, report_to)
 
         # 6. Train
-        torch.cuda.empty_cache()
+        # Clear CUDA cache before training
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            # Get available GPU memory
+            available_mem = torch.cuda.get_device_properties(
+                0
+            ).total_memory - torch.cuda.memory_allocated(0)
+            if available_mem < 4 * 1024 * 1024 * 1024:  # 4GB threshold
+                raise RuntimeError("Not enough GPU memory available for training")
+
         trainer = self.SFTTrainer(
             model=model,
             args=training_args,
@@ -150,7 +176,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
             f"/tmp/{job_id}_adapter",
             {
                 "job_id": job_id,
-                "model_id": model_config.get("model_id"),
+                "base_model_id": model_config.get("base_model_id"),
                 "use_unsloth": False,
                 "hf_repo_id": hf_repo_id,
             },
@@ -164,10 +190,10 @@ class HuggingFaceTrainingService(BaseTrainingService):
 
         return {
             "adapter_path": artifact.remote_path,
-            "model_id": artifact.model_id,
+            "base_model_id": artifact.base_model_id,
         }
 
-    def _setup_model(self, model_id, method):
+    def _setup_model(self, base_model_id, method, use_fa2):
         # Check supported models
         supported_models = [
             "google/gemma-3-1b-it",
@@ -176,14 +202,14 @@ class HuggingFaceTrainingService(BaseTrainingService):
             "google/gemma-3-27b-it",
         ]
 
-        if model_id not in supported_models:
+        if base_model_id not in supported_models:
             raise ValueError(
-                f"Unsupported model {model_id}. Supported models are: {', '.join(supported_models)}"
+                f"Unsupported model {base_model_id}. Supported models are: {', '.join(supported_models)}"
             )
 
         model_kwargs = {
             "torch_dtype": self.torch_dtype,
-            "attn_implementation": "eager",
+            "attn_implementation": "flash_attention_2" if use_fa2 else "eager",
             "device_map": "auto",
         }
 
@@ -196,8 +222,16 @@ class HuggingFaceTrainingService(BaseTrainingService):
                 bnb_4bit_compute_dtype=self.torch_dtype,
             )
 
-        model = self.AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
-        tokenizer = self.AutoTokenizer.from_pretrained(model_id)
+        if base_model_id == "google/gemma-3-1b-it":
+            model = self.AutoModelForCausalLM.from_pretrained(
+                base_model_id, **model_kwargs
+            )
+        else:
+            # For multimodal models, use AutoModelForImageTextToText
+            model = self.AutomodelForImageTextToText.from_pretrained(
+                base_model_id, **model_kwargs
+            )
+        tokenizer = self.AutoTokenizer.from_pretrained(base_model_id)
 
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -223,11 +257,22 @@ class HuggingFaceTrainingService(BaseTrainingService):
             bf16 = False
             fp16 = True
 
+        # TODO: Migrate this note to the documentation to guide the user:
+        # Trainer calculates steps per epoch as num_samples / batch_size / gradient_accumulation_steps
+        # Each step is defined by a weights update
+        # If max_steps is set, it will override num_train_epochs.
+        # Source: https://stackoverflow.com/questions/76002567/how-is-the-number-of-steps-calculated-in-huggingface-trainer
+
         return self.SFTConfig(
             output_dir=f"/tmp/{job_id}",
             max_seq_length=model_config.get("max_seq_length", 512),
             num_train_epochs=model_config.get("epochs", 3),
-            per_device_train_batch_size=model_config.get("batch_size", 1),
+            # using max_steps will directly override num_train_epochs
+            max_steps=model_config.get("max_steps", -1),  # -1 means no max steps
+            # Batch size on each GPU if multiple GPUs are used, for simplicity we use same batch size for train and eval
+            per_device_train_batch_size=model_config.get("batch_size", 8),
+            per_device_eval_batch_size=model_config.get("batch_size", 8),
+            # Do forward pass multiple times before updating weights
             gradient_accumulation_steps=model_config.get(
                 "gradient_accumulation_steps", 4
             ),
@@ -248,11 +293,12 @@ class HuggingFaceTrainingService(BaseTrainingService):
 
         The SFTTrainer can handle ChatML format directly, but we ensure
         the format is correct and consistent with preprocessing output.
-        """
-        # HuggingFace SFTTrainer expects datasets with "messages" field
-        # which is exactly what our preprocessing service outputs
-        # No transformation needed - just verify the format
 
+        SFTTrainer will call the apply_chat_template method using the given tokenizer
+        to convert the conversational format into standard format, and then tokenize it.
+        """
+
+        # HuggingFace SFTTrainer expects datasets with "messages" field
         def verify_format(examples):
             # Verify that all examples have the expected "messages" field
             messages_batch = examples.get("messages", [])
@@ -272,6 +318,7 @@ class UnslothTrainingService(BaseTrainingService):
 
     def __init__(self):
         # Import Unsloth libraries only when this service is instantiated
+        import unsloth
         from unsloth import FastModel
         from unsloth.chat_templates import (
             get_chat_template,
@@ -298,30 +345,40 @@ class UnslothTrainingService(BaseTrainingService):
 
     def run_training(self, req: TrainRequest) -> TrainResponse:
         """Orchestrate full Unsloth training workflow and return result"""
-        # Setup wandb if configured
-        report_to = self._setup_wandb(req.wandb_config)
+        try:
+            # Setup wandb if configured
+            report_to = self._setup_wandb(req.wandb_config)
 
-        processed_dataset_id = req.processed_dataset_id
-        model_cfg = req.model_config.dict()
-        model_id = model_cfg.get("model_id")
-        job_id = f"training_{processed_dataset_id}_{model_id.split('/')[-1]}"
-        logging.info(f"Starting Unsloth training job {job_id} with model {model_id}")
+            processed_dataset_id = req.processed_dataset_id
+            model_cfg = req.training_config.dict()
+            base_model_id = model_cfg.get("base_model_id")
+            job_id = f"training_{processed_dataset_id}_{base_model_id.split('/')[-1]}"
 
-        # Call core training logic
-        result = self._run_training_core(
-            processed_dataset_id,
-            model_cfg,
-            job_id,
-            req.export,
-            req.hf_repo_id,
-            report_to,
-        )
+            logging.info(
+                f"Starting Unsloth training job {job_id} with model {base_model_id}"
+            )
+            logging.info(f"Training config: {model_cfg}")
+            logging.info(f"Export type: {req.export}")
 
-        return TrainResponse(
-            job_id=job_id,
-            adapter_path=result["adapter_path"],
-            model_id=result["model_id"],
-        )
+            # Call core training logic
+            result = self._run_training_core(
+                processed_dataset_id,
+                model_cfg,
+                job_id,
+                req.export,
+                req.hf_repo_id,
+                report_to,
+            )
+
+            logging.info(f"Unsloth training completed successfully for job {job_id}")
+            return TrainResponse(
+                job_id=job_id,
+                adapter_path=result["adapter_path"],
+                base_model_id=result["base_model_id"],
+            )
+        except Exception as e:
+            logging.error(f"Unsloth training failed: {str(e)}", exc_info=True)
+            raise e
 
     def _run_training_core(
         self,
@@ -339,7 +396,7 @@ class UnslothTrainingService(BaseTrainingService):
 
         # 2. Setup model and tokenizer with Unsloth
         model, tokenizer = self._setup_unsloth_model(
-            model_config.get("model_id"), model_config
+            model_config.get("base_model_id"), model_config
         )
 
         # 3. Prepare dataset for Unsloth format
@@ -386,7 +443,7 @@ class UnslothTrainingService(BaseTrainingService):
             f"/tmp/{job_id}_adapter",
             {
                 "job_id": job_id,
-                "model_id": model_config.get("model_id"),
+                "base_model_id": model_config.get("base_model_id"),
                 "use_unsloth": True,
                 "hf_repo_id": hf_repo_id,
             },
@@ -400,15 +457,15 @@ class UnslothTrainingService(BaseTrainingService):
 
         return {
             "adapter_path": artifact.remote_path,
-            "model_id": artifact.model_id,
+            "base_model_id": artifact.base_model_id,
         }
 
-    def _setup_unsloth_model(self, model_id, model_config):
+    def _setup_unsloth_model(self, base_model_id, model_config):
         """Setup Unsloth model and tokenizer"""
 
         # Load base model with Unsloth
         model, tokenizer = self.FastModel.from_pretrained(
-            model_name=model_id,
+            model_name=base_model_id,
             max_seq_length=model_config.get("max_seq_length", 2048),
             load_in_4bit=True,
             load_in_8bit=False,
@@ -440,6 +497,7 @@ class UnslothTrainingService(BaseTrainingService):
     def _prepare_unsloth_dataset(self, dataset, tokenizer):
         """
         Prepare dataset for Unsloth training format
+        This essentially creates a new field "text" that has already been formatted according to Gemma template
         Source: https://docs.unsloth.ai/basics/datasets-guide
         """
         # Standardize format
@@ -463,14 +521,16 @@ class UnslothTrainingService(BaseTrainingService):
     def _setup_unsloth_training_args(self, model_config, job_id, report_to="none"):
         """Setup training arguments for Unsloth"""
         return self.SFTConfig(
-            dataset_text_field="text",
+            dataset_text_field="text",  # this matches with the field created in _prepare_unsloth_dataset
             output_dir=f"/tmp/{job_id}",
             per_device_train_batch_size=model_config.get("batch_size", 2),
+            per_device_eval_batch_size=model_config.get("batch_size", 2),
             gradient_accumulation_steps=model_config.get(
                 "gradient_accumulation_steps", 4
             ),
             warmup_steps=5,
             num_train_epochs=model_config.get("epochs", 1),
+            max_steps=model_config.get("max_steps", -1),  # -1 means no max steps
             learning_rate=model_config.get("learning_rate", 2e-4),
             logging_steps=1,
             optim="adamw_8bit",
@@ -487,6 +547,18 @@ class TrainingService:
     Training service with factory method design pattern to support multiple providers.
     This allows easy extension to add new training providers in the future.
 
+    TODO: This part can be migrated to the documentation to teach the user
+    Generally, training service handles the following steps when running:
+    1. Download processed dataset from storage
+    2. Setup base model and tokenizer either directly from HF or using Unsloth
+    3. If using quantization, apply BitsAndBytesConfig
+    4. Setup LoRA config and load a PEFT version of the model (in the future we might make this optional)
+    5. Prepare datasets for HuggingFace SFTTrainer format or Unsloth format
+    6. Setup training args (either SFTConfig or GRPOConfig, extensible in the future)
+    7. Train using SFTTrainer or GRPOTrainer
+    8. Save trained adapter using StorageStrategy (GCS or HuggingFace Hub)
+    9. Cleanup and return result with job_id, adapter_path, and base_model_id
+
     Usage:
     ```python
     # Create HuggingFace training service
@@ -497,7 +569,16 @@ class TrainingService:
 
     # Run training
     result = service.run_training(train_request)
+
+    # result contains job_id, adapter_path, and base_model_id
+    result.job_id  # e.g. "training_12345_gemma-3-1b-it"
+    result.adapter_path  # e.g. "gs://my-bucket/training_12345_gemma-3-1b-it_adapter"
+    result.base_model_id  # e.g. "google/gemma-3-1b-it"
     ```
+
+    When using the inference service, you should pass the `job_id` which will
+    automatically look up the adapter path and other resources. This is handled
+    in the API client in the frontend.
     """
 
     _providers = {

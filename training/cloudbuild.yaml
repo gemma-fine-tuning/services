@@ -1,15 +1,30 @@
 # Cloud Build configuration for training service
-# Usage: gcloud builds submit --config cloudbuild.yaml --substitutions=KEY=VALUE .
+# Usage: gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
+# To use cached images: gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore --substitutions=_USE_CACHE=true
+# Optionally using cached image from the artifact registry as in https://cloud.google.com/build/docs/optimize-builds/speeding-up-builds#yaml
 
 steps:
   - name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
     args:
-      [
-        "build",
-        "-t",
-        "us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service:latest",
-        ".",
-      ]
+      - "-c"
+      - |
+        if [ "${_USE_CACHE}" = "true" ]; then
+          docker pull us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service:latest || true
+        fi
+
+  - name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        if [ "${_USE_CACHE}" = "true" ]; then
+          docker build -t us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service:latest \
+            --cache-from us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service:latest \
+            .
+        else
+          docker build -t us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service:latest .
+        fi
 
   - name: "gcr.io/cloud-builders/docker"
     args:
@@ -18,12 +33,35 @@ steps:
         "us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service:latest",
       ]
 
+  - name: "gcr.io/cloud-builders/gcloud"
+    args:
+      [
+        "run",
+        "deploy",
+        "training-service",
+        "--image=us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service:latest",
+        "--region=us-central1",
+        "--platform=managed",
+        "--allow-unauthenticated",
+        "--memory=16Gi",
+        "--cpu=4",
+        "--no-cpu-throttling",
+        "--max-instances=1",
+        "--gpu=1",
+        "--set-env-vars=GCS_DATA_BUCKET_NAME=${_GCS_DATA_BUCKET_NAME},GCS_EXPORT_BUCKET_NAME=${_GCS_EXPORT_BUCKET_NAME}",
+        "--no-gpu-zonal-redundancy",
+        "--timeout=2400",
+      ]
+
+substitutions:
+  _USE_CACHE: "false"
+  _GCS_DATA_BUCKET_NAME: "gemma-dataset-bucket"
+  _GCS_EXPORT_BUCKET_NAME: "gemma-export-bucket"
+
 options:
   machineType: "E2_HIGHCPU_32"
-  diskSizeGb: 100
 
 timeout: "2400s"
 
-# Images to be pushed to registry
 images:
   - "us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service:latest"

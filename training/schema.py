@@ -2,17 +2,22 @@ from pydantic import BaseModel
 from typing import Literal, Optional
 
 
-class ModelConfig(BaseModel):
+class TrainingConfig(BaseModel):
     method: Literal["LoRA", "QLoRA", "RL"]
-    model_id: str
+    base_model_id: str
     lora_rank: Optional[int]
     lora_alpha: Optional[int]
     lora_dropout: Optional[float]
     learning_rate: float
-    batch_size: int
+    # Seems like batch size = 8 will cause OOM on the L4 on Cloud Run
+    # I haven't enforced a check yet but for prod we should probably limit this
+    batch_size: int = 4
     epochs: int
+    # Default this to -1 instead of None to avoid operator errors
+    max_steps: int = -1
     max_seq_length: int
     gradient_accumulation_steps: int
+    use_fa2: bool = False  # FA2 is only available when provider is "huggingface"
     provider: Literal["unsloth", "huggingface"] = "huggingface"
 
 
@@ -20,7 +25,7 @@ class WandbConfig(BaseModel):
     api_key: str
     # project is defaulted to "huggingface" if not provided
     project: Optional[str] = None
-    log_model: Optional[Literal["false", "checkpiont", "end"]] = None
+    log_model: Optional[Literal["false", "checkpoint", "end"]] = "end"
 
 
 class TrainRequest(BaseModel):
@@ -28,7 +33,7 @@ class TrainRequest(BaseModel):
     processed_dataset_id: str
     # NOTE: This is marked optional for dev but in deployment it should be required
     hf_token: Optional[str] = None
-    model_config: ModelConfig
+    training_config: TrainingConfig
     export: Literal["gcs", "hfhub"] = "gcs"
     # If export is hfhub, this is the Hugging Face repo ID to push the model to
     hf_repo_id: Optional[str] = None
@@ -40,12 +45,14 @@ class TrainRequest(BaseModel):
 class TrainResponse(BaseModel):
     job_id: str
     adapter_path: str
-    model_id: str
+    base_model_id: str
 
 
 class InferenceRequest(BaseModel):
+    # HF Token must be provided for Gemma models
     hf_token: Optional[str] = None
-    adapter_path: str
+    # The user should specify this so we don't have to look it up
+    storage_type: Literal["gcs", "hfhub"]
     prompt: str
 
 

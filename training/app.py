@@ -2,7 +2,7 @@ import os
 import logging
 from fastapi import FastAPI, HTTPException
 from huggingface_hub import login
-from training.schema import (
+from schema import (
     TrainRequest,
     TrainResponse,
     InferenceRequest,
@@ -54,9 +54,12 @@ async def train(request: TrainRequest):
             )
 
         login_hf(request.hf_token)
-        training_service = TrainingService.from_provider(request.model_config.provider)
+        training_service = TrainingService.from_provider(
+            request.training_config.provider
+        )
         return training_service.run_training(request)
     except Exception as e:
+        logging.error(f"Training failed with error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -69,15 +72,12 @@ async def inference(job_id: str, request: InferenceRequest):
 
     try:
         login_hf(request.hf_token)
-
-        # Determine storage type from job_id format (hfhub has "/" in repo names)
-        storage_type = "hfhub" if "/" in job_id else "gcs"
-
-        output = run_inference(job_id, prompt, storage_type)
+        output = run_inference(job_id, prompt, request.storage_type)
         return {"result": output}
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Adapter not found")
     except Exception as e:
+        logging.error(f"Inference failed with error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

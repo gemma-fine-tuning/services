@@ -1,7 +1,7 @@
 import os
 import logging
 import torch
-from model_storage import storage_service, StorageStrategyFactory
+from .model_storage import storage_service, StorageStrategyFactory
 
 
 class InferenceService:
@@ -54,23 +54,23 @@ class InferenceService:
         )
         artifact = strategy.load_model_info(job_id_or_repo)
 
-        model_id = artifact.model_id
+        base_model_id = artifact.base_model_id
         adapter_path = (
             artifact.local_path if storage_type == "gcs" else artifact.remote_path
         )
         use_unsloth = artifact.use_unsloth
 
-        if not model_id:
+        if not base_model_id:
             raise ValueError("Base model ID not found in adapter config")
 
         try:
             if use_unsloth:
                 output = self._run_inference_unsloth(
-                    model_id, adapter_path, prompt, storage_type
+                    base_model_id, adapter_path, prompt, storage_type
                 )
             else:
                 output = self._run_inference_transformers(
-                    model_id, adapter_path, prompt, storage_type
+                    base_model_id, adapter_path, prompt, storage_type
                 )
         finally:
             # Cleanup using strategy
@@ -83,7 +83,7 @@ class InferenceService:
 
     def _run_inference_transformers(
         self,
-        model_id: str,
+        base_model_id: str,
         adapter_path: str,
         prompt: str,
         stream: bool = False,
@@ -100,12 +100,12 @@ class InferenceService:
         # For GCS stored adapters, load base model then adapter from local path
         # For HF Hub adapters, load from repo_id
         model = AutoModelForCausalLM.from_pretrained(
-            model_id, torch_dtype=torch.float16, device_map="auto"
+            base_model_id, torch_dtype=torch.float16, device_map="auto"
         )
         model = PeftModel.from_pretrained(
             model, adapter_path
         )  # adapter_path is repo_id
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(base_model_id)
 
         # Create generation pipeline
         pipe = pipeline(
@@ -138,7 +138,7 @@ class InferenceService:
 
     def _run_inference_unsloth(
         self,
-        model_id: str,
+        base_model_id: str,
         adapter_path: str,
         prompt: str,
         stream: bool = False,
@@ -148,6 +148,7 @@ class InferenceService:
         NOTE: FastModel has added functionality for vision models compared to FastLanguageModel
         """
         # Dynamic imports
+        import unsloth
         from transformers import TextStreamer
         from unsloth import FastModel
         from unsloth.chat_templates import get_chat_template
@@ -157,7 +158,7 @@ class InferenceService:
 
         # Load base model
         model, tokenizer = FastModel.from_pretrained(
-            model_name=model_id,
+            model_name=base_model_id,
             max_seq_length=2048,
             load_in_4bit=True,
         )
@@ -186,7 +187,11 @@ class InferenceService:
             streamer=TextStreamer(tokenizer, skip_prompt=True) if stream else None,
         )
 
-        return tokenizer.batch_decode(outputs)[0].strip()
+        # Decode and only return the generated part
+        # TODO: It seems like this does not remove the special tokens like <start_of_turn>model
+        output_text = tokenizer.batch_decode(outputs)[0][len(text) :].strip()
+
+        return output_text
 
 
 # default service instance

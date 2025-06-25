@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CloudStoredModelMetadata:
     job_id: str
-    model_id: str
+    base_model_id: str
     gcs_prefix: str  # GCS folder prefix for adapter artifacts
     use_unsloth: bool = False
     local_dir: str = None  # Local path where artifacts are downloaded
@@ -60,7 +60,7 @@ class CloudStorageService:
         # upload metadata/config.json
         meta_dict = {
             "job_id": metadata.job_id,
-            "model_id": metadata.model_id,
+            "base_model_id": metadata.base_model_id,
             "use_unsloth": metadata.use_unsloth,
         }
 
@@ -109,7 +109,7 @@ class CloudStorageService:
         # build metadata object
         metadata = CloudStoredModelMetadata(
             job_id=job_id,
-            model_id=meta.get("model_id"),
+            base_model_id=meta.get("base_model_id"),
             gcs_prefix=prefix,
             use_unsloth=meta.get("use_unsloth", False),
             local_dir=local_dir,
@@ -157,7 +157,7 @@ class CloudStorageService:
 class ModelArtifact:
     """Unified representation of model artifacts regardless of storage backend"""
 
-    model_id: str
+    base_model_id: str
     job_id: str
     local_path: str
     remote_path: str
@@ -197,11 +197,11 @@ class GCSStorageStrategy(ModelStorageStrategy):
     ) -> ModelArtifact:
         """Save model to GCS and return artifact reference"""
         # Use existing storage service logic
-        from training.services.model_storage import CloudStoredModelMetadata
+        # CloudStoredModelMetadata is already defined in this module
 
         cloud_metadata = CloudStoredModelMetadata(
             job_id=metadata["job_id"],
-            model_id=metadata["model_id"],
+            base_model_id=metadata["base_model_id"],
             gcs_prefix=f"trained_adapters/{metadata['job_id']}",
             use_unsloth=metadata.get("use_unsloth", False),
             local_dir=local_path,
@@ -219,7 +219,7 @@ class GCSStorageStrategy(ModelStorageStrategy):
         remote_path = self.storage_service.upload_model(local_path, cloud_metadata)
 
         return ModelArtifact(
-            model_id=metadata["model_id"],
+            base_model_id=metadata["base_model_id"],
             job_id=metadata["job_id"],
             local_path=local_path,
             remote_path=remote_path,
@@ -232,7 +232,7 @@ class GCSStorageStrategy(ModelStorageStrategy):
         meta = self.storage_service.download_model(job_id)
 
         return ModelArtifact(
-            model_id=meta.model_id,
+            base_model_id=meta.base_model_id,
             job_id=meta.job_id,
             local_path=meta.local_dir,
             remote_path=f"gs://{self.storage_service.export_bucket}/{meta.gcs_prefix}/",
@@ -258,28 +258,21 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
         """Push model to HuggingFace Hub"""
         hf_repo_id = metadata["hf_repo_id"]
 
-        # Save locally first (optional, for consistency)
-        if hasattr(model, "save_pretrained"):
-            model.save_pretrained(local_path)
-        else:
-            model.save_model(local_path)
-        tokenizer.save_pretrained(local_path)
-
         # Push to HuggingFace Hub
         logging.info(f"Pushing model to Hugging Face Hub at {hf_repo_id}")
 
         if hasattr(model, "push_to_hub"):
             # Direct model push (for Unsloth/base models)
-            model.push_to_hub(repo_id=hf_repo_id, private=True)
+            model.push_to_hub(hf_repo_id, private=True)
         else:
             # For trainers, get the model first
-            model.model.push_to_hub(repo_id=hf_repo_id, private=True)
+            model.model.push_to_hub(hf_repo_id, private=True)
 
         tokenizer.push_to_hub(hf_repo_id)
 
         # Save additional metadata
         training_config = {
-            "model_id": metadata["model_id"],
+            "base_model_id": metadata["base_model_id"],
             "use_unsloth": metadata.get("use_unsloth", False),
             "job_id": metadata["job_id"],
         }
@@ -290,7 +283,7 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
             json.dump(training_config, f)
 
         return ModelArtifact(
-            model_id=metadata["model_id"],
+            base_model_id=metadata["base_model_id"],
             job_id=metadata["job_id"],
             local_path=local_path,
             remote_path=hf_repo_id,

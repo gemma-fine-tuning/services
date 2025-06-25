@@ -20,6 +20,7 @@ Set the `PROJECT_ID` and `DATA_BUCKET_NAME` and `EXPORT_BUCKET_NAME` environment
 
 ```bash
 export PROJECT_ID=your-project-id
+# Replace the following -dev with -bucket if you're using the gsoc project
 export DATA_BUCKET_NAME=gemma-dataset-dev
 export EXPORT_BUCKET_NAME=gemma-export-dev
 ```
@@ -43,9 +44,13 @@ gcloud builds submit --config cloudbuild.yaml \
 
 ### Deploy to Cloud Run
 
-> We are in the process of migrating this to Terraform IaC since it is easy to mess up these configurations manually. However, this process will take quite long so please use this manual deployment method for now.
+> We are in the process of migrating this to Terraform IaC. For now, just use the `cloudbuild.yaml` which contains a step to deploy the service automatically after building the image.
 
-Default GPU type is `--gpu-type nvidia-l4`
+```bash
+gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
+```
+
+If you still wish to deploy manually, this is no longer recommended but you can do it like this:
 
 ```bash
 gcloud run deploy training-service \
@@ -63,9 +68,13 @@ gcloud run deploy training-service \
   --no-gpu-zonal-redundancy
 ```
 
-To remove GPU: `gcloud run services update SERVICE --gpu 0`
+Notes:
 
-Note that for free tier you must set no zonal redundancy otherwise it will say you don't have enough quota bla bla bla.
+- Default GPU type is `--gpu-type nvidia-l4`
+
+- To remove GPU: `gcloud run services update SERVICE --gpu 0`
+
+- For free tier you must set `--no-gpu-zonal-redundancy` otherwise it will say you don't have enough quota bla bla bla.
 
 **After pushing a new image you can update the service with:**
 
