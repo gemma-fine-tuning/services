@@ -9,15 +9,6 @@ class DatasetUploadResponse(BaseModel):
     size_bytes: int
 
 
-class DatasetAnalysisResponse(BaseModel):
-    dataset_id: str
-    total_samples: int
-    columns: List[str]
-    sample_data: List[Dict[str, Any]]
-    column_info: Dict[str, Any]
-    format_type: str
-
-
 class FieldMappingConfig(BaseModel):
     type: Literal["column", "template"]
     value: str

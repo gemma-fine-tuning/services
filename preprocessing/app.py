@@ -5,7 +5,6 @@ from storage import GCSStorageManager, LocalStorageManager
 from services.dataset_service import DatasetService
 from schema import (
     DatasetUploadResponse,
-    DatasetAnalysisResponse,
     PreprocessingRequest,
     ProcessingResult,
     DatasetInfoResponse,
@@ -64,24 +63,6 @@ async def upload_dataset(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Error uploading dataset: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
-
-
-@app.post("/analyze", response_model=DatasetAnalysisResponse)
-async def analyze_dataset(
-    dataset_source: str, dataset_id: str, sample_size: int = None
-):
-    """Analyze a dataset and return metadata with suggested field mappings"""
-    try:
-        result = await dataset_service.analyze_dataset(
-            dataset_source=dataset_source,
-            dataset_id=dataset_id,
-            sample_size=sample_size,
-        )
-        return result
-
-    except Exception as e:
-        logger.error(f"Error analyzing dataset: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 
 @app.post("/preview", response_model=PreviewResponse)

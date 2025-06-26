@@ -1,15 +1,13 @@
 import uuid
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 from storage.base import StorageInterface
 from .dataset_handler import DatasetHandler
 from .dataset_loader import DatasetLoader
-from .dataset_analyzer import DatasetAnalyzer
 from .format_converter import FormatConverter
 from augmentation import run_augment_pipeline
 from schema import (
     DatasetUploadResponse,
-    DatasetAnalysisResponse,
     ProcessingResult,
     DatasetInfoResponse,
     PreprocessingConfig,
@@ -23,27 +21,23 @@ logger = logging.getLogger(__name__)
 class DatasetService:
     """
     A class that orchestrates all dataset operations and provides a unified interface
-    for dataset management, processing, and analysis.
+    for dataset management and processing.
 
     This service combines functionality from multiple components:
     - DatasetHandler: Handles file uploads
     - DatasetLoader: Loads datasets from various sources
-    - DatasetAnalyzer: Analyzes dataset structure and content
     - FormatConverter: Converts datasets to ChatML format
 
     The service provides high-level operations for:
     - Uploading datasets
-    - Analyzing dataset structure and content
     - Previewing dataset processing
     - Processing datasets to ChatML format
     - Managing processed datasets
-    - Validating dataset formats
 
     Attributes:
         storage (StorageInterface): Interface for storage operations
         uploader (DatasetHandler): Handles dataset uploads
         loader (DatasetLoader): Handles dataset loading
-        analyzer (DatasetAnalyzer): Handles dataset analysis
         converter (FormatConverter): Handles format conversion
 
     Example:
@@ -63,7 +57,6 @@ class DatasetService:
         self.storage = storage
         self.handler = DatasetHandler(storage)
         self.loader = DatasetLoader(storage)
-        self.analyzer = DatasetAnalyzer()
         self.converter = FormatConverter()
 
     async def upload_dataset(
@@ -110,61 +103,6 @@ class DatasetService:
             ... )
         """
         return await self.handler.upload_dataset(file_data, filename, metadata)
-
-    async def analyze_dataset(
-        self, dataset_source: str, dataset_id: str, sample_size: Optional[int] = None
-    ) -> DatasetAnalysisResponse:
-        """
-        Load and analyze a dataset to provide comprehensive metadata.
-
-        This method performs a complete analysis of the dataset, including:
-        - Loading the dataset from the specified source
-        - Analyzing dataset structure
-        - Computing statistics
-        - Detecting format type
-        - Providing sample data
-
-        Args:
-            dataset_source (str): The source of the dataset. Must be one of:
-                - 'upload': For user-uploaded datasets
-                - 'huggingface': For datasets from Hugging Face
-            dataset_id (str): The identifier for the dataset:
-                - For 'upload': The file ID of the uploaded dataset
-                - For 'huggingface': The Hugging Face dataset name
-            sample_size (Optional[int]): The number of samples to analyze.
-                If None, analyzes the entire dataset.
-
-        Returns:
-            DatasetAnalysisResponse: An object containing:
-                - dataset_id (str): The analyzed dataset's ID
-                - total_samples (int): Total number of samples
-                - columns (List[str]): List of column names
-                - sample_data (List[Dict]): Sample data
-                - column_info (Dict): Column statistics
-                - format_type (str): Detected format type
-
-        Raises:
-            Exception: If there's an error during analysis
-
-        Example:
-            >>> analysis = await service.analyze_dataset(
-            ...     "upload",
-            ...     "my_dataset_id",
-            ...     sample_size=1000
-            ... )
-        """
-        try:
-            dataset = await self.loader.load_dataset(
-                dataset_source, dataset_id, sample_size
-            )
-
-            analysis = self.analyzer.analyze_dataset(dataset)
-
-            return DatasetAnalysisResponse(dataset_id=dataset_id, **analysis)
-
-        except Exception as e:
-            logger.error(f"Error analyzing dataset: {str(e)}")
-            raise
 
     async def preview_processing(
         self,
@@ -462,38 +400,6 @@ class DatasetService:
         except Exception as e:
             logger.error(f"Error getting dataset info: {str(e)}")
             raise
-
-    def get_column_statistics(self, dataset: List[Dict], column: str) -> Dict[str, Any]:
-        """
-        Get detailed statistics for a specific column.
-
-        This method provides comprehensive statistics for a given column, including:
-        - Total number of values
-        - Number of unique values
-        - Sample values
-        - For text fields: average, minimum, and maximum lengths
-
-        Args:
-            dataset (List[Dict]): The dataset to analyze
-            column (str): The name of the column to analyze
-
-        Returns:
-            Dict[str, Any]: A dictionary containing:
-                - total_values (int): Total number of values
-                - unique_values (int): Number of unique values
-                - sample_values (List): First 10 values
-                - For text fields:
-                    - avg_length (float): Average length of values
-                    - min_length (int): Minimum length
-                    - max_length (int): Maximum length
-                - error (str): Error message if no valid values found
-
-        Example:
-            >>> stats = service.get_column_statistics(dataset, 'question')
-            >>> print(stats['avg_length'])
-            45.6
-        """
-        return self.analyzer.get_column_statistics(dataset, column)
 
     def _apply_augmentation(self, dataset, augmentation_config: Dict):
         """
