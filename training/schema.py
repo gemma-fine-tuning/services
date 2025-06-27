@@ -15,7 +15,6 @@ class TrainingConfig(BaseModel):
     epochs: int
     # Default this to -1 instead of None to avoid operator errors
     max_steps: Optional[int] = -1
-    max_length: Optional[int]  # used when packing sequences
     max_seq_length: Optional[int]  # used to load pretrained models
     packing: bool = True  # whether to pack sequences for training
     gradient_accumulation_steps: int
@@ -48,6 +47,19 @@ class TrainResponse(BaseModel):
     job_id: str
     adapter_path: str
     base_model_id: str
+
+
+class SubmitTrainResponse(BaseModel):
+    job_id: str
+    wandb_url: Optional[str] = None
+
+
+class JobStatusResponse(BaseModel):
+    status: Literal["queued", "preparing", "training", "completed", "failed"]
+    wandb_url: Optional[str] = None
+    adapter_path: Optional[str] = None
+    base_model_id: Optional[str] = None
+    error: Optional[str] = None
 
 
 class InferenceRequest(BaseModel):

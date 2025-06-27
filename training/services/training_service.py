@@ -1,6 +1,5 @@
 import logging
 import torch
-import os
 from abc import ABC, abstractmethod
 from .model_storage import storage_service, StorageStrategyFactory
 from schema import TrainRequest, TrainResponse, WandbConfig
@@ -10,40 +9,51 @@ class BaseTrainingService(ABC):
     """Abstract base class for training services"""
 
     @abstractmethod
-    def run_training(self, req: TrainRequest) -> TrainResponse:
+    def run_training(self, req: TrainRequest, job_tracker=None) -> TrainResponse:
         """
-        Run training with the given configuration
+        Run training with the given configuration and optional job tracker
 
         Args:
-            res: `TrainRequest` containing model config and dataset info
+            req: `TrainRequest` containing model config and dataset info
+            job_tracker: Optional JobTracker instance for granular status updates
 
         Returns:
             TrainResponse: Training result with job_id, adapter_path, and base_model_id
         """
         pass
 
-    def _setup_wandb(self, config: WandbConfig) -> str:
+    def _setup_wandb(self, config: WandbConfig, job_id: str = None) -> tuple[str, str]:
         """
-        Setup wandb environment variables and return report_to value
-        This function can be expanded to support other logging frameworks like tensorboard in the future.
+        Setup WandB and return (report_to, wandb_url)
+
+        Args:
+            config: WandB configuration
+            job_id: Job identifier for WandB run name
+
+        Returns:
+            Tuple of (report_to, wandb_url) where wandb_url is None if not configured
         """
-        if not config:
-            return "none"
+        if not config or not config.api_key:
+            return "none", None
 
-        if not config.api_key:
-            logging.warning(
-                "WandB config provided but no API key set. WandB logging will be disabled."
-            )
-            return "none"
+        # Import wandb here to avoid import at module level
+        import wandb
 
-        os.environ["WANDB_API_KEY"] = config.api_key
+        # Login to wandb (sets API key locally)
+        wandb.login(key=config.api_key)
 
-        if config.project:
-            os.environ["WANDB_PROJECT"] = config.project
-        if config.log_model:
-            os.environ["WANDB_LOG_MODEL"] = config.log_model
+        # Initialize wandb with user settings
+        wandb.init(
+            project=config.project or "gemma-fine-tuning",
+            name=job_id,
+            tags=["fine-tuning"],
+        )
 
-        return "wandb"
+        # Get the actual wandb URL
+        # NOTE: This assumes that wandb generates a URL that is consistent with the run
+        wandb_url = wandb.run.get_url() if wandb.run else None
+
+        return "wandb", wandb_url
 
 
 class HuggingFaceTrainingService(BaseTrainingService):
@@ -76,12 +86,9 @@ class HuggingFaceTrainingService(BaseTrainingService):
         else:
             self.torch_dtype = torch.float16
 
-    def run_training(self, req: TrainRequest) -> TrainResponse:
+    def run_training(self, req: TrainRequest, job_tracker=None) -> TrainResponse:
         """Orchestrate full training workflow and return result"""
         try:
-            # Setup wandb if configured
-            report_to = self._setup_wandb(req.wandb_config)
-
             processed_dataset_id = req.processed_dataset_id
             model_cfg = req.training_config.dict()
             base_model_id = model_cfg.get("base_model_id")
@@ -93,14 +100,15 @@ class HuggingFaceTrainingService(BaseTrainingService):
             logging.info(f"Training config: {model_cfg}")
             logging.info(f"Export type: {req.export}")
 
-            # Call core training logic
+            # Call core training logic with job tracker
             result = self._run_training_core(
                 processed_dataset_id,
                 model_cfg,
                 job_id,
                 req.export,
                 req.hf_repo_id,
-                report_to,
+                req.wandb_config,
+                job_tracker,
             )
 
             logging.info(f"Training completed successfully for job {job_id}")
@@ -120,8 +128,12 @@ class HuggingFaceTrainingService(BaseTrainingService):
         job_id,
         export,
         hf_repo_id=None,
-        report_to="none",
+        wandb_config=None,
+        job_tracker=None,
     ):
+        if job_tracker:
+            job_tracker.preparing("Preparing HuggingFace training...")
+
         # 1. Download processed dataset
         train_dataset, eval_dataset = storage_service.download_processed_dataset(
             processed_dataset_id
@@ -131,7 +143,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
         model, tokenizer = self._setup_model(
             model_config.get("base_model_id", "google/gemma-3-1b-it"),
             model_config.get("method", "LoRA"),
-            model_config.get("use_fa2", True),
+            model_config.get("use_fa2", False),
         )
 
         # 3. Prepare datasets for HuggingFace training format
@@ -149,6 +161,9 @@ class HuggingFaceTrainingService(BaseTrainingService):
             logging.info(
                 "Full fine-tuning selected, not applying LoRA or QLoRA. This will be slow and might result in GPU OOM"
             )
+
+        # 4.5. Setup WandB and get URL
+        report_to, wandb_url = self._setup_wandb(wandb_config, job_id)
 
         # 5. Setup training args
         training_args = self._setup_training_args(model_config, job_id, report_to)
@@ -171,6 +186,11 @@ class HuggingFaceTrainingService(BaseTrainingService):
             eval_dataset=prepared_eval_dataset,
             processing_class=tokenizer,
         )
+
+        # Progress tracking: start actual training with WandB URL
+        if job_tracker:
+            job_tracker.training(wandb_url)
+
         trainer.train()
 
         # Use storage strategy to save model
@@ -252,7 +272,15 @@ class HuggingFaceTrainingService(BaseTrainingService):
             lora_dropout=model_config.get("lora_dropout", 0.05),
             r=model_config.get("lora_rank", 16),
             bias="none",
-            target_modules="all-linear",
+            target_modules=[
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
+            ],
             task_type="CAUSAL_LM",
             modules_to_save=["lm_head", "embed_tokens"],
         )
@@ -290,8 +318,8 @@ class HuggingFaceTrainingService(BaseTrainingService):
             max_steps=model_config.get("max_steps", -1),  # -1 means no max steps
             learning_rate=model_config.get("learning_rate", 2e-4),
             # Packing packs the tokenized sequences to max_len
-            max_length=model_config.get("max_length", 1024),
             packing=model_config.get("packing", True),
+            padding_free=True if model_config.get("use_fa2", False) else False,
             fp16=fp16,
             bf16=bf16,
             optim="adamw_torch_fused",
@@ -364,12 +392,9 @@ class UnslothTrainingService(BaseTrainingService):
         else:
             self.torch_dtype = torch.float16
 
-    def run_training(self, req: TrainRequest) -> TrainResponse:
+    def run_training(self, req: TrainRequest, job_tracker=None) -> TrainResponse:
         """Orchestrate full Unsloth training workflow and return result"""
         try:
-            # Setup wandb if configured
-            report_to = self._setup_wandb(req.wandb_config)
-
             processed_dataset_id = req.processed_dataset_id
             model_cfg = req.training_config.dict()
             base_model_id = model_cfg.get("base_model_id")
@@ -381,14 +406,15 @@ class UnslothTrainingService(BaseTrainingService):
             logging.info(f"Training config: {model_cfg}")
             logging.info(f"Export type: {req.export}")
 
-            # Call core training logic
+            # Call core training logic with job tracker
             result = self._run_training_core(
                 processed_dataset_id,
                 model_cfg,
                 job_id,
                 req.export,
                 req.hf_repo_id,
-                report_to,
+                req.wandb_config,
+                job_tracker,
             )
 
             logging.info(f"Unsloth training completed successfully for job {job_id}")
@@ -408,8 +434,12 @@ class UnslothTrainingService(BaseTrainingService):
         job_id,
         export,
         hf_repo_id=None,
-        report_to="none",
+        wandb_config=None,
+        job_tracker=None,
     ):
+        if job_tracker:
+            job_tracker.preparing("Preparing Unsloth training...")
+
         # 1. Download processed dataset
         train_dataset, eval_dataset = storage_service.download_processed_dataset(
             processed_dataset_id
@@ -430,7 +460,10 @@ class UnslothTrainingService(BaseTrainingService):
                 eval_dataset, tokenizer
             )
 
-        # 4. Setup training args
+        # 4. Setup WandB and get URL
+        report_to, wandb_url = self._setup_wandb(wandb_config, job_id)
+
+        # 4.5. Setup training args
         training_args = self._setup_unsloth_training_args(
             model_config, job_id, report_to
         )
@@ -451,6 +484,10 @@ class UnslothTrainingService(BaseTrainingService):
             instruction_part="<start_of_turn>user\n",
             response_part="<start_of_turn>model\n",
         )
+
+        # Progress tracking: start actual training with WandB URL
+        if job_tracker:
+            job_tracker.training(wandb_url)
 
         trainer.train()
 
@@ -500,10 +537,19 @@ class UnslothTrainingService(BaseTrainingService):
             # Apply PEFT with Unsloth
             model = self.FastModel.get_peft_model(
                 model,
-                finetune_vision_layers=False,  # turn off since we're just doing text right now
-                finetune_language_layers=False,  # optionally on or off
-                finetune_attention_modules=False,  # Attention good for GRPO and improves training efficiency
-                finetune_mlp_modules=True,  # should always be on according to docs
+                # finetune_vision_layers=False,  # turn off since we're just doing text right now
+                # finetune_language_layers=True,  # optionally on or off
+                # finetune_attention_modules=False,  # Attention good for GRPO and improves training efficiency
+                # finetune_mlp_modules=True,  # should always be on according to docs
+                target_modules=[
+                    "q_proj",
+                    "k_proj",
+                    "v_proj",
+                    "o_proj",
+                    "gate_proj",
+                    "up_proj",
+                    "down_proj",
+                ],
                 r=model_config.get("lora_rank", 8),
                 lora_alpha=model_config.get("lora_alpha", 8),
                 lora_dropout=model_config.get("lora_dropout", 0.0),
@@ -577,8 +623,8 @@ class UnslothTrainingService(BaseTrainingService):
             num_train_epochs=model_config.get("epochs", 3),
             max_steps=model_config.get("max_steps", -1),
             learning_rate=model_config.get("learning_rate", 2e-4),
-            max_length=model_config.get("max_length", 1024),
             packing=model_config.get("packing", True),
+            padding_free=True if model_config.get("use_fa2", False) else False,
             fp16=fp16,
             bf16=bf16,
             optim="adamw_8bit",

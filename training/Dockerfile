@@ -22,7 +22,7 @@ RUN pip install --no-cache-dir uv
 # Copy requirements and install Python dependencies using UV
 COPY pyproject.toml uv.lock ./
 
-# Install PyTorch with CUDA support first, then remaining dependencies, then flash-attn
+# Install PyTorch with CUDA support first, then remaining dependencies, then force CUDA again
 RUN uv venv && \
     uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 && \
     uv sync --frozen --no-cache --verbose && \

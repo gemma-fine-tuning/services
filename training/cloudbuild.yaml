@@ -46,9 +46,11 @@ steps:
         "--memory=16Gi",
         "--cpu=4",
         "--no-cpu-throttling",
-        "--max-instances=1",
+        "--max-instances=2",
+        "--concurrency=2",
         "--gpu=1",
         "--set-env-vars=GCS_DATA_BUCKET_NAME=${_GCS_DATA_BUCKET_NAME},GCS_EXPORT_BUCKET_NAME=${_GCS_EXPORT_BUCKET_NAME}",
+        "--set-env-vars=PROJECT_ID=$PROJECT_ID",
         "--no-gpu-zonal-redundancy",
         "--timeout=2400",
       ]
@@ -62,6 +64,3 @@ options:
   machineType: "E2_HIGHCPU_32"
 
 timeout: "2400s"
-
-images:
-  - "us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service:latest"
