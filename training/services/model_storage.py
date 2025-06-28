@@ -25,6 +25,14 @@ class CloudStorageService:
     """
     Service for managing artifacts in Google Cloud Storage (GCS).
     This is used for **BOTH** dataset retrieval and model artifact storage.
+
+    Handles uploading/downloading model adapters and processed datasets to/from GCS buckets.
+    Provides a unified interface for cloud storage operations across the training pipeline.
+
+    Args:
+        storage_client: Google Cloud Storage client instance
+        data_bucket: GCS bucket name for storing datasets
+        export_bucket: GCS bucket name for storing trained model artifacts
     """
 
     def __init__(self, storage_client, data_bucket: str, export_bucket: str):
@@ -121,11 +129,17 @@ class CloudStorageService:
         """
         Download processed dataset files from GCS and return as HuggingFace Datasets.
 
+        Retrieves training and optional evaluation datasets from the configured data bucket.
+        The datasets are expected to be stored as JSON files with specific naming conventions.
+
         Args:
             processed_dataset_id (str): Identifier for the processed dataset
 
         Returns:
             Tuple[Dataset, Optional[Dataset]]: Train and eval datasets
+
+        Raises:
+            FileNotFoundError: If the training dataset is not found in GCS
         """
         bucket = self.storage_client.bucket(self.data_bucket)
 
@@ -166,18 +180,52 @@ class ModelArtifact:
 
 
 class ModelStorageStrategy(ABC):
-    """Abstract base strategy for model storage operations"""
+    """
+    Abstract base strategy for model storage operations.
+
+    Implements the Strategy pattern to support multiple storage backends (GCS, HuggingFace Hub, etc.).
+    Each concrete strategy handles the specifics of saving, loading, and cleaning up model artifacts
+    for its respective storage system.
+
+    This abstraction allows the training pipeline to work with different storage backends
+    without changing the core training logic.
+    """
 
     @abstractmethod
     def save_model(
         self, model, tokenizer, local_path: str, metadata: Dict[str, Any]
     ) -> ModelArtifact:
-        """Save model artifacts and return artifact reference"""
+        """
+        Save model artifacts and return artifact reference.
+
+        Persists the trained model and tokenizer to the storage backend and returns
+        a ModelArtifact containing metadata and paths for later retrieval.
+
+        Args:
+            model: The trained model (can be a trainer, model, or adapter)
+            tokenizer: The tokenizer associated with the model
+            local_path: Local directory path for temporary storage
+            metadata: Dictionary containing job_id, base_model_id, and storage-specific config
+
+        Returns:
+            ModelArtifact: Artifact reference with paths and metadata
+        """
         pass
 
     @abstractmethod
     def load_model_info(self, artifact_id: str) -> ModelArtifact:
-        """Load model metadata and prepare for inference"""
+        """
+        Load model metadata and prepare for inference.
+
+        Retrieves model information from the storage backend without loading the actual
+        model weights. This is used to get artifact metadata for inference setup.
+
+        Args:
+            artifact_id: Storage-specific identifier (job_id for GCS, repo_id for HF Hub)
+
+        Returns:
+            ModelArtifact: Artifact reference with metadata for model loading
+        """
         pass
 
     @abstractmethod
@@ -187,7 +235,16 @@ class ModelStorageStrategy(ABC):
 
 
 class GCSStorageStrategy(ModelStorageStrategy):
-    """Google Cloud Storage implementation"""
+    """
+    Google Cloud Storage implementation of model storage strategy.
+
+    Handles saving and loading model artifacts to/from GCS buckets. This strategy
+    is used for persistent storage of trained adapters and supports both Unsloth
+    and standard HuggingFace models.
+
+    Args:
+        storage_service: CloudStorageService instance for GCS operations
+    """
 
     def __init__(self, storage_service):
         self.storage_service = storage_service
@@ -195,7 +252,22 @@ class GCSStorageStrategy(ModelStorageStrategy):
     def save_model(
         self, model, tokenizer, local_path: str, metadata: Dict[str, Any]
     ) -> ModelArtifact:
-        """Save model to GCS and return artifact reference"""
+        """
+        Save model to GCS and return artifact reference.
+
+        First saves the model locally, then uploads all artifacts to the configured
+        GCS export bucket under a job-specific prefix. Handles both trainer objects
+        and direct model instances.
+
+        Args:
+            model: Trained model or trainer instance
+            tokenizer: Associated tokenizer
+            local_path: Temporary local directory for staging files
+            metadata: Must contain job_id, base_model_id, and optional use_unsloth flag
+
+        Returns:
+            ModelArtifact: Reference to the uploaded model with GCS paths
+        """
         # Use existing storage service logic
         # CloudStoredModelMetadata is already defined in this module
 
@@ -247,7 +319,15 @@ class GCSStorageStrategy(ModelStorageStrategy):
 
 
 class HuggingFaceHubStrategy(ModelStorageStrategy):
-    """HuggingFace Hub storage implementation"""
+    """
+    HuggingFace Hub storage implementation of model storage strategy.
+
+    Pushes trained models directly to HuggingFace Hub repositories for public or private
+    sharing. This strategy is ideal for models that will be shared or need to be accessible
+    via the HuggingFace ecosystem.
+
+    Note: Requires proper HuggingFace authentication and repository permissions.
+    """
 
     def __init__(self):
         pass
@@ -290,7 +370,19 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
         )
 
     def load_model_info(self, repo_id: str) -> ModelArtifact:
-        """Load model info from HuggingFace Hub"""
+        """
+        Load model info from HuggingFace Hub.
+
+        Attempts to retrieve model configuration from the HuggingFace repository
+        to determine the base model and framework used. Falls back gracefully
+        if configuration files are not available.
+
+        Args:
+            repo_id: HuggingFace repository identifier (e.g., "user/model-name")
+
+        Returns:
+            ModelArtifact: Model metadata for inference setup
+        """
         from huggingface_hub import hf_hub_download
 
         try:
@@ -326,18 +418,40 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
 
 class StorageStrategyFactory:
     """
-    Factory for creating storage strategies
+    Factory for creating storage strategies.
+
+    Implements the Factory pattern to instantiate the appropriate storage strategy
+    based on the export type specified in training requests. This allows the training
+    pipeline to work with multiple storage backends without tight coupling.
 
     Example:
     ```python
     storage_strategy = StorageStrategyFactory.create_strategy("gcs", storage_service=storage_service)
     artifact = storage_strategy.save_model(model, tokenizer, local_path, metadata)
     ```
+
+    Supported storage types:
+    - "gcs": Google Cloud Storage (requires storage_service parameter)
+    - "hfhub": HuggingFace Hub (no additional parameters required)
     """
 
     @staticmethod
     def create_strategy(storage_type: str, **kwargs) -> ModelStorageStrategy:
-        """Create appropriate storage strategy"""
+        """
+        Create appropriate storage strategy based on type.
+
+        Args:
+            storage_type: Type of storage ("gcs" or "hfhub")
+            **kwargs: Additional parameters required by specific strategies
+                     - For "gcs": storage_service (CloudStorageService instance)
+                     - For "hfhub": no additional parameters required
+
+        Returns:
+            ModelStorageStrategy: Configured storage strategy instance
+
+        Raises:
+            ValueError: If storage_type is not supported
+        """
         if storage_type == "gcs":
             return GCSStorageStrategy(kwargs.get("storage_service"))
         elif storage_type == "hfhub":

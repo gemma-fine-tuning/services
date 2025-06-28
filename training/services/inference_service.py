@@ -16,13 +16,6 @@ class InferenceService:
     The service automatically detects the adapter type (Unsloth vs standard) and loads
     the appropriate inference pipeline. For HF Hub, it attempts to read configuration
     files to determine the base model and training framework used.
-
-    Usage:
-        # For GCS-stored adapters (backward compatible)
-        result = inference_service.run_inference("job_12345", "Hello!", "gcs")
-
-        # For HF Hub-stored adapters
-        result = inference_service.run_inference("username/adapter-repo", "Hello!", "hfhub")
     """
 
     def __init__(self):
@@ -35,6 +28,7 @@ class InferenceService:
     ) -> str:
         """
         Fetch adapter artifacts, run generation, and return output text.
+        Handles model loading, prompt formatting, and output postprocessing.
 
         Args:
             job_id_or_repo (str): Job ID for GCS or HF Hub repository ID
@@ -88,7 +82,19 @@ class InferenceService:
         prompt: str,
         stream: bool = False,
     ) -> str:
-        """Run inference using Transformers with trained adapter"""
+        """
+        Run inference using Transformers with trained adapter.
+        Loads the base model and adapter, applies chat template, and generates output.
+
+        Args:
+            base_model_id (str): Base model ID or repository ID
+            adapter_path (str): Path to the adapter artifacts
+            prompt (str): Input text to generate a response for
+            stream (bool): Whether to stream the output (default: False)
+
+        Returns:
+            str: Generated text response from the model
+        """
         from transformers import (
             AutoModelForCausalLM,
             AutoTokenizer,
@@ -144,8 +150,17 @@ class InferenceService:
         stream: bool = False,
     ) -> str:
         """
-        Run inference using Unsloth with trained adapter
-        NOTE: FastModel has added functionality for vision models compared to FastLanguageModel
+        Run inference using Unsloth with trained adapter.
+        Loads the Unsloth model and adapter, applies chat template, and generates output.
+
+        Args:
+            base_model_id (str): Base model ID or repository ID
+            adapter_path (str): Path to the adapter artifacts
+            prompt (str): Input text to generate a response for
+            stream (bool): Whether to stream the output (default: False)
+
+        Returns:
+            str: Generated text response from the model
         """
         # Dynamic imports
         import unsloth
@@ -201,6 +216,7 @@ inference_service = InferenceService()
 def run_inference(job_id_or_repo: str, prompt: str, storage_type: str = "gcs") -> str:
     """
     Convenience function for running inference with different storage backends.
+    Handles model loading and output generation for both GCS and HF Hub.
 
     Args:
         job_id_or_repo (str): Job ID for GCS or HF Hub repository ID

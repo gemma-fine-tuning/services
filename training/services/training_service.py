@@ -6,12 +6,18 @@ from schema import TrainRequest, TrainResponse, WandbConfig
 
 
 class BaseTrainingService(ABC):
-    """Abstract base class for training services"""
+    """
+    Abstract base class for all training services.
+    Defines the interface for running training jobs and WandB setup.
+    Subclasses must implement the run_training method for their specific framework.
+    """
 
     @abstractmethod
     def run_training(self, req: TrainRequest, job_tracker=None) -> TrainResponse:
         """
-        Run training with the given configuration and optional job tracker
+        Run training with the given configuration and optional job tracker.
+        This method orchestrates the full training workflow, including model setup,
+        dataset preparation, training, and artifact saving.
 
         Args:
             req: `TrainRequest` containing model config and dataset info
@@ -24,7 +30,8 @@ class BaseTrainingService(ABC):
 
     def _setup_wandb(self, config: WandbConfig, job_id: str = None) -> tuple[str, str]:
         """
-        Setup WandB and return (report_to, wandb_url)
+        Setup WandB and return (report_to, wandb_url).
+        Handles WandB login and initialization for experiment tracking.
 
         Args:
             config: WandB configuration
@@ -57,7 +64,11 @@ class BaseTrainingService(ABC):
 
 
 class HuggingFaceTrainingService(BaseTrainingService):
-    """Training service using HuggingFace Transformers and PEFT"""
+    """
+    Training service using HuggingFace Transformers and PEFT.
+    Supports LoRA, QLoRA, and full fine-tuning for Gemma models.
+    Handles model setup, dataset preparation, training, and artifact export.
+    """
 
     def __init__(self):
         # Import HF libraries only when this service is instantiated
@@ -87,7 +98,17 @@ class HuggingFaceTrainingService(BaseTrainingService):
             self.torch_dtype = torch.float16
 
     def run_training(self, req: TrainRequest, job_tracker=None) -> TrainResponse:
-        """Orchestrate full training workflow and return result"""
+        """
+        Orchestrate full training workflow and return result.
+        Handles all steps from dataset download to model export for HuggingFace models.
+
+        Args:
+            req: `TrainRequest` containing model config and dataset info
+            job_tracker: Optional JobTracker instance for granular status updates
+
+        Returns:
+            TrainResponse: Training result with job_id, adapter_path, and base_model_id
+        """
         try:
             processed_dataset_id = req.processed_dataset_id
             model_cfg = req.training_config.dict()
@@ -131,6 +152,23 @@ class HuggingFaceTrainingService(BaseTrainingService):
         wandb_config=None,
         job_tracker=None,
     ):
+        """
+        Core training logic for HuggingFace models.
+        Handles dataset download, model/tokenizer setup, LoRA config, training, and export.
+        Updates job status via job_tracker if provided.
+
+        Args:
+            processed_dataset_id: ID of the processed dataset to train on
+            model_config: Model configuration parameters
+            job_id: Unique identifier for the training job
+            export: Export type (e.g., to GCS or HuggingFace Hub)
+            hf_repo_id: Optional HuggingFace repository ID for model saving
+            wandb_config: Optional WandB configuration for experiment tracking
+            job_tracker: Optional JobTracker instance for granular status updates
+
+        Returns:
+            dict: Contains `adapter_path` and `base_model_id` of the trained model
+        """
         if job_tracker:
             job_tracker.preparing("Preparing HuggingFace training...")
 
@@ -221,6 +259,18 @@ class HuggingFaceTrainingService(BaseTrainingService):
         }
 
     def _setup_model(self, base_model_id, method, use_fa2):
+        """
+        Setup and return the base model and tokenizer for training.
+        Applies quantization and attention optimizations as needed.
+
+        Args:
+            base_model_id: ID of the base model to use
+            method: Fine-tuning method (e.g., LoRA, QLoRA, Full)
+            use_fa2: Whether to use FlashAttention 2.0
+
+        Returns:
+            tuple: (model, tokenizer) - the initialized model and tokenizer
+        """
         # Check supported models
         supported_models = [
             "google/gemma-3-1b-it",
@@ -266,7 +316,17 @@ class HuggingFaceTrainingService(BaseTrainingService):
         return model, tokenizer
 
     def _setup_peft_with_lora(self, model, model_config):
-        """Setup PEFT with LoRA configuration for the model"""
+        """
+        Setup PEFT with LoRA configuration for the model.
+        Returns a PEFT-wrapped model ready for training.
+
+        Args:
+            model: The base model to wrap with LoRA
+            model_config: Model configuration parameters
+
+        Returns:
+            The PEFT-wrapped model with LoRA applied
+        """
         lora_config = self.LoraConfig(
             lora_alpha=model_config.get("lora_alpha", 16),
             lora_dropout=model_config.get("lora_dropout", 0.05),
@@ -288,7 +348,18 @@ class HuggingFaceTrainingService(BaseTrainingService):
         return self.get_peft_model(model, lora_config)
 
     def _setup_training_args(self, model_config, job_id, report_to="none"):
-        """Setup training arguments for SFTTrainer."""
+        """
+        Setup training arguments for SFTTrainer.
+        Returns a SFTConfig object with all training hyperparameters.
+
+        Args:
+            model_config: Model configuration parameters
+            job_id: Unique identifier for the training job
+            report_to: Reporting destination for logs (e.g., "none", "wandb")
+
+        Returns:
+            SFTConfig: Configured training arguments
+        """
         if self.torch_dtype == torch.bfloat16:
             bf16 = True
             fp16 = False
@@ -334,12 +405,14 @@ class HuggingFaceTrainingService(BaseTrainingService):
     def _prepare_hf_dataset(self, dataset, tokenizer):
         """
         Prepare dataset for HuggingFace SFTTrainer format.
+        Ensures the dataset is in the correct conversational format for training.
 
-        The SFTTrainer can handle ChatML format directly, but we ensure
-        the format is correct and consistent with preprocessing output.
+        Args:
+            dataset: The dataset to prepare
+            tokenizer: The tokenizer to use for encoding
 
-        SFTTrainer will call the apply_chat_template method using the given tokenizer
-        to convert the conversational format into standard format, and then tokenize it.
+        Returns:
+            The prepared dataset ready for SFTTrainer
         """
 
         # HuggingFace SFTTrainer expects datasets with "messages" field
@@ -358,7 +431,11 @@ class HuggingFaceTrainingService(BaseTrainingService):
 
 
 class UnslothTrainingService(BaseTrainingService):
-    """Training service using Unsloth framework"""
+    """
+    Training service using the Unsloth framework for efficient LLM fine-tuning.
+    Supports 4-bit quantization and custom chat templates for Gemma models.
+    Handles model setup, dataset formatting, training, and artifact export.
+    """
 
     def __init__(self):
         # Import Unsloth libraries only when this service is instantiated
@@ -393,7 +470,17 @@ class UnslothTrainingService(BaseTrainingService):
             self.torch_dtype = torch.float16
 
     def run_training(self, req: TrainRequest, job_tracker=None) -> TrainResponse:
-        """Orchestrate full Unsloth training workflow and return result"""
+        """
+        Orchestrate full Unsloth training workflow and return result.
+        Handles all steps from dataset download to model export for Unsloth models.
+
+        Args:
+            req: `TrainRequest` containing model config and dataset info
+            job_tracker: Optional JobTracker instance for granular status updates
+
+        Returns:
+            TrainResponse: Training result with job_id, adapter_path, and base_model_id
+        """
         try:
             processed_dataset_id = req.processed_dataset_id
             model_cfg = req.training_config.dict()
@@ -437,6 +524,23 @@ class UnslothTrainingService(BaseTrainingService):
         wandb_config=None,
         job_tracker=None,
     ):
+        """
+        Core training logic for Unsloth models.
+        Handles dataset download, model/tokenizer setup, training, and export.
+        Updates job status via job_tracker if provided.
+
+        Args:
+            processed_dataset_id: ID of the processed dataset to train on
+            model_config: Model configuration parameters
+            job_id: Unique identifier for the training job
+            export: Export type (e.g., to GCS or HuggingFace Hub)
+            hf_repo_id: Optional HuggingFace repository ID for model saving
+            wandb_config: Optional WandB configuration for experiment tracking
+            job_tracker: Optional JobTracker instance for granular status updates
+
+        Returns:
+            dict: Contains `adapter_path` and `base_model_id` of the trained model
+        """
         if job_tracker:
             job_tracker.preparing("Preparing Unsloth training...")
 
@@ -519,7 +623,17 @@ class UnslothTrainingService(BaseTrainingService):
         }
 
     def _setup_unsloth_model(self, base_model_id, model_config):
-        """Setup Unsloth model and tokenizer"""
+        """
+        Setup Unsloth model and tokenizer for training or inference.
+        Applies quantization and chat template configuration.
+
+        Args:
+            base_model_id: ID of the base model to use
+            model_config: Model configuration parameters
+
+        Returns:
+            tuple: (model, tokenizer) - the initialized model and tokenizer
+        """
 
         # Load base model with Unsloth
         # NOTE: Since we used 4 bit bnb for HF QLoRA training we keep it consistent here
@@ -571,9 +685,15 @@ class UnslothTrainingService(BaseTrainingService):
 
     def _prepare_unsloth_dataset(self, dataset, tokenizer):
         """
-        Prepare dataset for Unsloth training format
-        This essentially creates a new field "text" that has already been formatted according to Gemma template
-        Source: https://docs.unsloth.ai/basics/datasets-guide
+        Prepare dataset for Unsloth training format.
+        Standardizes and formats the dataset for Unsloth SFTTrainer.
+
+        Args:
+            dataset: The dataset to prepare
+            tokenizer: The tokenizer to use for encoding
+
+        Returns:
+            The prepared dataset ready for Unsloth SFTTrainer
         """
         # Standardize format
         dataset = self.standardize_data_formats(dataset)
@@ -603,7 +723,18 @@ class UnslothTrainingService(BaseTrainingService):
         return dataset
 
     def _setup_unsloth_training_args(self, model_config, job_id, report_to="none"):
-        """Setup training arguments for Unsloth"""
+        """
+        Setup training arguments for Unsloth SFTTrainer.
+        Returns a SFTConfig object with all training hyperparameters.
+
+        Args:
+            model_config: Model configuration parameters
+            job_id: Unique identifier for the training job
+            report_to: Reporting destination for logs (e.g., "none", "wandb")
+
+        Returns:
+            SFTConfig: Configured training arguments
+        """
         if self.torch_dtype == torch.bfloat16:
             bf16 = True
             fp16 = False
@@ -639,40 +770,8 @@ class UnslothTrainingService(BaseTrainingService):
 class TrainingService:
     """
     Training service with factory method design pattern to support multiple providers.
-    This allows easy extension to add new training providers in the future.
-
-    TODO: This part can be migrated to the documentation to teach the user
-    Generally, training service handles the following steps when running:
-    1. Download processed dataset from storage
-    2. Setup base model and tokenizer either directly from HF or using Unsloth
-    3. If using quantization, apply BitsAndBytesConfig
-    4. Setup LoRA config and load a PEFT version of the model (in the future we might make this optional)
-    5. Prepare datasets for HuggingFace SFTTrainer format or Unsloth format
-    6. Setup training args (either SFTConfig or GRPOConfig, extensible in the future)
-    7. Train using SFTTrainer or GRPOTrainer
-    8. Save trained adapter using StorageStrategy (GCS or HuggingFace Hub)
-    9. Cleanup and return result with job_id, adapter_path, and base_model_id
-
-    Usage:
-    ```python
-    # Create HuggingFace training service
-    service = TrainingService.from_provider("huggingface")
-
-    # Create Unsloth training service
-    service = TrainingService.from_provider("unsloth")
-
-    # Run training
-    result = service.run_training(train_request)
-
-    # result contains job_id, adapter_path, and base_model_id
-    result.job_id  # e.g. "training_12345_gemma-3-1b-it"
-    result.adapter_path  # e.g. "gs://my-bucket/training_12345_gemma-3-1b-it_adapter"
-    result.base_model_id  # e.g. "google/gemma-3-1b-it"
-    ```
-
-    When using the inference service, you should pass the `job_id` which will
-    automatically look up the adapter path and other resources. This is handled
-    in the API client in the frontend.
+    Allows easy extension to add new training providers in the future.
+    Provides unified interface for running training jobs with different frameworks.
     """
 
     _providers = {
@@ -683,12 +782,10 @@ class TrainingService:
     @classmethod
     def from_provider(cls, provider: str) -> BaseTrainingService:
         """
-        Create training service instance using provider name.
+        Create a training service instance for the specified provider.
 
         Args:
-            provider: Training provider name. Supported values:
-                - "huggingface": HuggingFace Transformers (TRL + SFT + PEFT)
-                - "unsloth": Unsloth framework (built on top of HuggingFace)
+            provider: Name of the training provider ("huggingface" or "unsloth")
 
         Returns:
             BaseTrainingService: Configured training service instance
@@ -712,5 +809,10 @@ class TrainingService:
 
     @classmethod
     def list_providers(cls) -> list:
-        """List all available training providers"""
+        """
+        List all supported training providers.
+
+        Returns:
+            list: Names of supported providers
+        """
         return list(cls._providers.keys())
