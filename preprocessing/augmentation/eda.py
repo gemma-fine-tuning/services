@@ -10,9 +10,32 @@ from random import shuffle
 import re
 import nltk
 from nltk.corpus import wordnet
+import logging
 
-# NOTE: need a better way to handle this download...
-nltk.download("wordnet")
+logger = logging.getLogger(__name__)
+
+
+def _ensure_wordnet_available():
+    """Safely ensure WordNet is available, downloading if necessary"""
+    try:
+        # Test if wordnet is already available
+        wordnet.synsets("test")
+        return True
+    except LookupError:
+        try:
+            logger.info("WordNet not found, downloading...")
+            nltk.download("wordnet", quiet=True)
+            logger.info("Successfully downloaded WordNet data")
+            return True
+        except Exception as e:
+            logger.warning(
+                f"Failed to download WordNet: {e}. EDA will use basic augmentation only."
+            )
+            return False
+
+
+# Initialize WordNet availability (only download if needed)
+_wordnet_available = _ensure_wordnet_available()
 
 random.seed(1)
 
@@ -202,16 +225,25 @@ def synonym_replacement(words, n):
 
 
 def get_synonyms(word):
+    """Get synonyms for a word using WordNet, if available"""
+    if not _wordnet_available:
+        return []
+
     synonyms = set()
-    for syn in wordnet.synsets(word):
-        for l in syn.lemmas():
-            synonym = l.name().replace("_", " ").replace("-", " ").lower()
-            synonym = "".join(
-                [char for char in synonym if char in " qwertyuiopasdfghjklzxcvbnm"]
-            )
-            synonyms.add(synonym)
-    if word in synonyms:
-        synonyms.remove(word)
+    try:
+        for syn in wordnet.synsets(word):
+            for lemma in syn.lemmas():
+                synonym = lemma.name().replace("_", " ").replace("-", " ").lower()
+                synonym = "".join(
+                    [char for char in synonym if char in " qwertyuiopasdfghjklzxcvbnm"]
+                )
+                synonyms.add(synonym)
+        if word in synonyms:
+            synonyms.remove(word)
+    except Exception as e:
+        logger.warning(f"Error getting synonyms for '{word}': {e}")
+        return []
+
     return list(synonyms)
 
 

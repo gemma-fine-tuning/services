@@ -54,6 +54,16 @@ This service replaces the original `preprocessing/app.py` Flask application with
 
 ## Deployment
 
+### Cloud Deployment
+
+> IMPORTANT: This has been updated so pls use this command below:
+
+```bash
+gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
+```
+
+This command will handle building, pushing, and deploying Cloud Run service.
+
 ### Local Development
 
 ```bash

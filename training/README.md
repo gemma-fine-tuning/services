@@ -6,6 +6,8 @@ Implementation follows [Gemma Fine Tuning (Text) Guide](https://ai.google.dev/ge
 
 ## Deploying to Cloud Run with GPU Support
 
+### Prerequisites
+
 Refer to [this documentation](https://cloud.google.com/run/docs/configuring/services/gpu) for more info. I already have the artifacts repository created for the gemma-fine-tuning project.
 
 ```bash
@@ -18,11 +20,14 @@ Set the `PROJECT_ID` and `DATA_BUCKET_NAME` and `EXPORT_BUCKET_NAME` environment
 
 ```bash
 export PROJECT_ID=your-project-id
+# Replace the following -dev with -bucket if you're using the gsoc project
 export DATA_BUCKET_NAME=gemma-dataset-dev
 export EXPORT_BUCKET_NAME=gemma-export-dev
 ```
 
-1. **Build and Push the Docker Image**
+### Build and Push the Docker Image
+
+Build this locally (highly unrecommended):
 
 ```bash
 docker build -t us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service .
@@ -33,12 +38,19 @@ docker push us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-se
 Build this on cloud build instead (recommended due to huge base image size):
 
 ```bash
-gcloud builds submit --tag us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service .
+gcloud builds submit --config cloudbuild.yaml \
+  --project $PROJECT_ID
 ```
 
-2. **Deploy to Cloud Run**
+### Deploy to Cloud Run
 
-Default GPU type is `--gpu-type nvidia-l4`
+> We are in the process of migrating this to Terraform IaC. For now, just use the `cloudbuild.yaml` which contains a step to deploy the service automatically after building the image.
+
+```bash
+gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
+```
+
+If you still wish to deploy manually, this is no longer recommended but you can do it like this:
 
 ```bash
 gcloud run deploy training-service \
@@ -56,11 +68,15 @@ gcloud run deploy training-service \
   --no-gpu-zonal-redundancy
 ```
 
-To remove GPU: `gcloud run services update SERVICE --gpu 0`
+Notes:
 
-Note that for free tier you must set no zonal redundancy otherwise it will say you don't have enough quota bla bla bla.
+- Default GPU type is `--gpu-type nvidia-l4`
 
-After pushing a new image you can update the service with:
+- To remove GPU: `gcloud run services update SERVICE --gpu 0`
+
+- For free tier you must set `--no-gpu-zonal-redundancy` otherwise it will say you don't have enough quota bla bla bla.
+
+**After pushing a new image you can update the service with:**
 
 ```bash
 gcloud run services update training-service \
@@ -69,10 +85,6 @@ gcloud run services update training-service \
 
 ## TODO
 
-- Implement flash attention since we're using L4 GPUs (there seemed to be some issues with the flash attention installation, so it is not included in the Dockerfile yet)
-
 - Add support for visual tasks once the preprocessing for that is implemented, see the multimodal guide
-
-- Unsloth: https://colab.research.google.com/github/unslothai/notebooks/blob/main/nb/Gemma3_(4B).ipynb#scrollTo=kR3gIAX-SM2q
 
 - Monitoring the training job progress using TensorBoard or w&b, I intentionally disabled the built in logging and also removed using my custom logging, will add that in the future
