@@ -198,7 +198,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
             export, storage_service=storage_service
         )
         artifact = storage_strategy.save_model(
-            trainer,
+            model,
             tokenizer,
             f"/tmp/{job_id}_adapter",
             {

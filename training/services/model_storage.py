@@ -255,20 +255,18 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
     def save_model(
         self, model, tokenizer, local_path: str, metadata: Dict[str, Any]
     ) -> ModelArtifact:
-        """Push model to HuggingFace Hub"""
+        """
+        Push model to HuggingFace Hub
+        NOTE: DO NOT PASS IN TRAINER OBJECT FOR `model` PARAMETER! It has different kwargs requirements.
+        """
         hf_repo_id = metadata["hf_repo_id"]
 
         # Push to HuggingFace Hub
         logging.info(f"Pushing model to Hugging Face Hub at {hf_repo_id}")
 
-        if hasattr(model, "push_to_hub"):
-            # Direct model push (for Unsloth/base models)
-            model.push_to_hub(hf_repo_id, private=True)
-        else:
-            # For trainers, get the model first
-            model.model.push_to_hub(hf_repo_id, private=True)
-
-        tokenizer.push_to_hub(hf_repo_id)
+        # Direct model push (for Unsloth/base models)
+        model.push_to_hub(hf_repo_id, private=True)
+        tokenizer.push_to_hub(hf_repo_id, private=True)
 
         # Save additional metadata
         training_config = {
