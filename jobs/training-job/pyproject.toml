@@ -1,0 +1,39 @@
+[project]
+name = "training"
+version = "0.1.0"
+description = "Training service"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "torch>=2.7.0",
+    "accelerate==1.4.0",
+    "google-cloud-storage==2.10.0",
+    "google-cloud-firestore>=2.11.0",
+    "bitsandbytes==0.45.3",
+    "datasets==3.3.2",
+    "evaluate==0.4.3",
+    "huggingface-hub>=0.32.4",
+    "peft==0.14.0",
+    "transformers>=4.50.0",
+    "trl==0.15.2",
+    "fastapi==0.104.1",
+    "uvicorn[standard]==0.24.0",
+    "wandb",
+    "unsloth"
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu128" },
+]
+torchvision = [
+  { index = "pytorch-cu128" },
+]
+torchaudio = [
+  { index = "pytorch-cu128" },
+]
