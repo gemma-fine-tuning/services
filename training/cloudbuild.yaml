@@ -5,26 +5,13 @@
 
 steps:
   - name: "gcr.io/cloud-builders/docker"
-    entrypoint: "bash"
     args:
-      - "-c"
-      - |
-        if [ "${_USE_CACHE}" = "true" ]; then
-          docker pull us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service:latest || true
-        fi
-
-  - name: "gcr.io/cloud-builders/docker"
-    entrypoint: "bash"
-    args:
-      - "-c"
-      - |
-        if [ "${_USE_CACHE}" = "true" ]; then
-          docker build -t us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service:latest \
-            --cache-from us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service:latest \
-            .
-        else
-          docker build -t us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service:latest .
-        fi
+      [
+        "build",
+        "-t",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service:latest",
+        ".",
+      ]
 
   - name: "gcr.io/cloud-builders/docker"
     args:
@@ -43,20 +30,13 @@ steps:
         "--region=us-central1",
         "--platform=managed",
         "--allow-unauthenticated",
-        "--memory=16Gi",
-        "--cpu=4",
-        "--no-cpu-throttling",
-        "--max-instances=2",
-        "--concurrency=2",
-        "--gpu=1",
+        "--memory=2Gi",
+        "--cpu=2",
         "--set-env-vars=GCS_DATA_BUCKET_NAME=${_GCS_DATA_BUCKET_NAME},GCS_EXPORT_BUCKET_NAME=${_GCS_EXPORT_BUCKET_NAME}",
         "--set-env-vars=PROJECT_ID=$PROJECT_ID",
-        "--no-gpu-zonal-redundancy",
-        "--timeout=2400",
       ]
 
 substitutions:
-  _USE_CACHE: "false"
   _GCS_DATA_BUCKET_NAME: "gemma-dataset-bucket"
   _GCS_EXPORT_BUCKET_NAME: "gemma-export-bucket"
 

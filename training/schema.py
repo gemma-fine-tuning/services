@@ -43,15 +43,8 @@ class TrainRequest(BaseModel):
     wandb_config: Optional[WandbConfig] = None
 
 
-class TrainResponse(BaseModel):
+class JobSubmitResponse(BaseModel):
     job_id: str
-    adapter_path: str
-    base_model_id: str
-
-
-class SubmitTrainResponse(BaseModel):
-    job_id: str
-    wandb_url: Optional[str] = None
 
 
 class JobStatusResponse(BaseModel):
@@ -60,15 +53,3 @@ class JobStatusResponse(BaseModel):
     adapter_path: Optional[str] = None
     base_model_id: Optional[str] = None
     error: Optional[str] = None
-
-
-class InferenceRequest(BaseModel):
-    # HF Token must be provided for Gemma models
-    hf_token: Optional[str] = None
-    # The user should specify this so we don't have to look it up
-    storage_type: Literal["gcs", "hfhub"]
-    prompt: str
-
-
-class InferenceResponse(BaseModel):
-    result: str
