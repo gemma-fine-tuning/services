@@ -1,37 +1,39 @@
 [project]
-name = "gemma3-ft-inference"
+name = "gemma3-inference"
 version = "0.1.0"
 description = "Infernece for trained adapters"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "torch>=2.7.0",
+    "torch>=2.6.0",
     "accelerate==1.4.0",
     "google-cloud-storage==2.10.0",
     "google-cloud-firestore>=2.11.0",
     "bitsandbytes==0.45.3",
-    "datasets==3.3.2",
+    "datasets>=3.4.1",
     "evaluate==0.4.3",
     "huggingface-hub>=0.32.4",
     "peft==0.14.0",
     "transformers>=4.50.0",
     "fastapi==0.104.1",
     "uvicorn[standard]==0.24.0",
-    "unsloth"
+    "unsloth==2025.6.12",
+    "unsloth_zoo==2025.6.8",
+    "xformers==0.0.29.post3"
 ]
 
 [[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
 [tool.uv.sources]
 torch = [
-  { index = "pytorch-cu128" },
+  { index = "pytorch-cu124" },
 ]
 torchvision = [
-  { index = "pytorch-cu128" },
+  { index = "pytorch-cu124" },
 ]
 torchaudio = [
-  { index = "pytorch-cu128" },
+  { index = "pytorch-cu124" },
 ]

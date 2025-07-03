@@ -32,7 +32,7 @@ steps:
         "--max-instances=2",
         "--concurrency=2",
         "--no-gpu-zonal-redundancy",
-        "--timeout=2400",
+        "--timeout=3600",
         "--set-env-vars=GCS_DATA_BUCKET_NAME=${_GCS_DATA_BUCKET_NAME},GCS_EXPORT_BUCKET_NAME=${_GCS_EXPORT_BUCKET_NAME}",
         "--set-env-vars=PROJECT_ID=$PROJECT_ID",
       ]
