@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Optional, Dict, Any
 from google.cloud import firestore
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class JobStatus(Enum):
@@ -38,18 +38,16 @@ class JobStateManager:
     Provides clean API for tracking training job progress.
     """
 
-    def __init__(
-        self, db_client: firestore.Client, collection_name: str = "training_jobs"
-    ):
+    def __init__(self, project_id: str, collection_name: str = "training_jobs"):
         """
         Initialize job state manager.
 
         Args:
-            db_client: Firestore client instance
+            project_id: Google Cloud project ID
             collection_name: Name of the Firestore collection for jobs
         """
-        self.db = db_client
-        self.collection = db_client.collection(collection_name)
+        self.db = firestore.Client(project=project_id)
+        self.collection = self.db.collection(collection_name)
         self.logger = logging.getLogger(__name__)
 
     def get_job(self, job_id: str) -> Optional[JobMetadata]:
@@ -111,3 +109,37 @@ class JobStateManager:
             "error": job.error,
             "progress_info": job.progress_info,
         }
+
+    def ensure_job_document_exists(
+        self, job_id: str, job_metadata: Optional[JobMetadata] = None
+    ):
+        """
+        Ensure a job document exists in Firestore. If not, create it with the provided metadata or minimal info.
+        """
+        doc_ref = self.collection.document(job_id)
+        doc = doc_ref.get()
+        if not doc.exists:
+            if job_metadata is None:
+                # Create with minimal info
+                job_metadata = JobMetadata(
+                    job_id=job_id,
+                    status=JobStatus.QUEUED,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                    processed_dataset_id="",
+                    base_model_id="",
+                )
+            doc_ref.set(
+                {
+                    "job_id": job_metadata.job_id,
+                    "status": job_metadata.status.value,
+                    "created_at": job_metadata.created_at,
+                    "updated_at": job_metadata.updated_at,
+                    "processed_dataset_id": job_metadata.processed_dataset_id,
+                    "base_model_id": job_metadata.base_model_id,
+                    "adapter_path": job_metadata.adapter_path,
+                    "wandb_url": job_metadata.wandb_url,
+                    "error": job_metadata.error,
+                    "progress_info": job_metadata.progress_info,
+                }
+            )

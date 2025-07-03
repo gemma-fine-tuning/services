@@ -1,7 +1,7 @@
 [project]
-name = "training"
+name = "gemma3-training"
 version = "0.1.0"
-description = "Training service"
+description = "Trigger train jobs and monitor status"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

@@ -1,13 +1,14 @@
 import os
 import logging
 from fastapi import FastAPI, HTTPException
-from google.cloud import firestore
 from google.cloud import run_v2
 from google.cloud import storage
 from schema import TrainRequest, JobSubmitResponse, JobStatusResponse
-from job_manager import JobStateManager
+from job_manager import JobStateManager, JobMetadata, JobStatus
 import json
 import uvicorn
+import hashlib
+from datetime import datetime, timezone
 
 app = FastAPI(
     title="Gemma Training Service",
@@ -24,13 +25,12 @@ logging.info("✅ Training service ready")
 project_id = os.getenv("PROJECT_ID")
 if not project_id:
     raise ValueError("PROJECT_ID environment variable must be set for Firestore client")
-db = firestore.Client(project=project_id)
-job_manager = JobStateManager(db)
+job_manager = JobStateManager(project_id)
 
 # These will not be configured in the os envvars because they are pretty much fixed to these two values
 REGION = os.getenv("REGION", "us-central1")
 JOB_NAME = os.getenv("TRAINING_JOB_NAME", "training-job")
-GCS_CONFIG_BUCKET = os.getenv("GCS_CONFIG_BUCKET", "gemma-train-config")
+GCS_CONFIG_BUCKET = os.getenv("GCS_CONFIG_BUCKET_NAME", "gemma-train-config")
 
 
 @app.get("/health")
@@ -38,17 +38,42 @@ async def health_check():
     return {"status": "healthy", "service": "training"}
 
 
+def make_job_id(processed_dataset_id, base_model_id, request):
+    """
+    Creates a job ID for a training job.
+    This has the following properties:
+    - IDs are only the same if the processed dataset ID, base model ID, and request are the same
+    - IDs are deterministic, i.e. same request will always produce the same ID
+    - IDs are short because we truncate the hash to 8 characters
+    """
+    base = f"training_{processed_dataset_id}_{base_model_id.split('/')[-1]}"
+    request_str = json.dumps(request.model_dump(), sort_keys=True)
+    short_hash = hashlib.sha256(request_str.encode()).hexdigest()[:8]
+    return f"{base}_{short_hash}"
+
+
 @app.post("/train", response_model=JobSubmitResponse)
 async def start_training(request: TrainRequest):
     processed_dataset_id = request.processed_dataset_id
     base_model_id = request.training_config.base_model_id
-    job_id = f"training_{processed_dataset_id}_{base_model_id.split('/')[-1]}"
+    job_id = make_job_id(processed_dataset_id, base_model_id, request)
 
     if request.export == "hfhub" and not request.hf_repo_id:
         raise HTTPException(
             status_code=400,
             detail="hf_repo_id is required when export is hfhub",
         )
+
+    # Immediately create job record in Firestore
+    job_metadata = JobMetadata(
+        job_id=job_id,
+        status=JobStatus.QUEUED,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        processed_dataset_id=request.processed_dataset_id,
+        base_model_id=request.training_config.base_model_id,
+    )
+    job_manager.ensure_job_document_exists(job_id, job_metadata)
 
     # Upload config to GCS
     try:
