@@ -7,6 +7,7 @@ class DatasetUploadResponse(BaseModel):
     filename: str
     gcs_path: str
     size_bytes: int
+    sample: List[Dict[str, Any]]
 
 
 class FieldMappingConfig(BaseModel):

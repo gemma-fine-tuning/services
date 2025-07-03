@@ -7,6 +7,7 @@ from werkzeug.utils import secure_filename
 from storage.base import StorageInterface
 from schema import DatasetUploadResponse
 from datasets import DatasetDict
+import pandas as pd
 import io
 
 logger = logging.getLogger(__name__)
@@ -150,11 +151,18 @@ class DatasetHandler:
                 file_data, blob_name, upload_metadata
             )
 
+            sample = (
+                pd.read_csv(io.BytesIO(file_data)).head(5).to_dict(orient="records")
+            )
+
+            print(sample)
+
             return DatasetUploadResponse(
                 dataset_id=file_id,
                 filename=secure_name,
                 gcs_path=storage_path,
                 size_bytes=len(file_data),
+                sample=sample,
             )
 
         except Exception as e:
