@@ -348,18 +348,6 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
         model.push_to_hub(hf_repo_id, private=True)
         tokenizer.push_to_hub(hf_repo_id, private=True)
 
-        # Save additional metadata
-        training_config = {
-            "base_model_id": metadata["base_model_id"],
-            "use_unsloth": metadata.get("use_unsloth", False),
-            "job_id": metadata["job_id"],
-        }
-
-        # Upload training config to HF Hub for inference
-        config_path = os.path.join(local_path, "adapter_training_config.json")
-        with open(config_path, "w") as f:
-            json.dump(training_config, f)
-
         return ModelArtifact(
             base_model_id=metadata["base_model_id"],
             job_id=metadata["job_id"],
