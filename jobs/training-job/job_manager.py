@@ -52,36 +52,11 @@ class JobStateManager:
         self.collection = db_client.collection(collection_name)
         self.logger = logging.getLogger(__name__)
 
-    def ensure_job_document_exists(
-        self, job_id: str, job_metadata: Optional[JobMetadata] = None
-    ):
-        doc_ref = self.collection.document(job_id)
-        if not doc_ref.get().exists:
-            if job_metadata:
-                doc_ref.set(
-                    {
-                        **job_metadata.__dict__,
-                        "status": job_metadata.status.value
-                        if isinstance(job_metadata.status, Enum)
-                        else job_metadata.status,
-                    }
-                )
-            else:
-                doc_ref.set(
-                    {
-                        "status": JobStatus.QUEUED.value,
-                        "created_at": datetime.now(timezone.utc),
-                    }
-                )
-
-    def mark_preparing(
-        self, job_id: str, info: Optional[Dict[str, Any]] = None
-    ) -> None:
+    def mark_preparing(self, job_id: str) -> None:
         self.collection.document(job_id).update(
             {
                 "status": JobStatus.PREPARING.value,
                 "updated_at": datetime.now(timezone.utc),
-                "progress_info": info or {},
             }
         )
         self.logger.info(f"Marked job {job_id} as preparing")
@@ -125,7 +100,7 @@ class JobTracker:
     """
     Context manager that automatically handles job status transitions.
     Usage:
-        with JobTracker(job_manager, job_id, job_metadata) as tracker:
+        with JobTracker(job_manager, job_id) as tracker:
             tracker.preparing("Loading model...")
             # do preparation work
             tracker.training(wandb_url="https://...")
@@ -137,27 +112,24 @@ class JobTracker:
         self,
         job_manager: JobStateManager,
         job_id: str,
-        job_metadata: Optional[JobMetadata] = None,
     ):
         self.job_manager = job_manager
         self.job_id = job_id
-        self.job_metadata = job_metadata
         self._error_occurred = False
 
     def __enter__(self):
-        self.job_manager.ensure_job_document_exists(self.job_id, self.job_metadata)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        """Automatically marks the job as failed if an error occurs."""
         if exc_type and not self._error_occurred:
             error_msg = f"{exc_type.__name__}: {str(exc_val)}"
             self.job_manager.mark_failed(self.job_id, error_msg)
         return False  # Don't suppress exceptions
 
-    def preparing(self, info: Optional[str] = None):
+    def preparing(self):
         """Mark job as preparing"""
-        progress_info = {"message": info} if info else None
-        self.job_manager.mark_preparing(self.job_id, progress_info)
+        self.job_manager.mark_preparing(self.job_id)
 
     def training(self, wandb_url: Optional[str] = None):
         """Mark job as training"""

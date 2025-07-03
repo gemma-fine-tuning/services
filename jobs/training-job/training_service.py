@@ -3,7 +3,8 @@ import torch
 from abc import ABC, abstractmethod
 from model_storage import storage_service, StorageStrategyFactory
 from schema import TrainRequest, WandbConfig
-from typing import Optional
+from typing import Optional, Tuple, List, Dict, Any
+from job_manager import JobTracker
 
 
 class BaseTrainingService(ABC):
@@ -14,11 +15,13 @@ class BaseTrainingService(ABC):
     """
 
     @abstractmethod
-    def run_training(self, req: TrainRequest, job_tracker=None) -> dict:
+    def run_training(self, req: TrainRequest, job_tracker: JobTracker) -> dict:
         """
         Run training with the given configuration and optional job tracker.
         This method orchestrates the full training workflow, including model setup,
         dataset preparation, training, and artifact saving.
+
+        NOTE: This should save the result to firestore because otherwise we won't return anything from cloud run jobs!
 
         Args:
             req: `TrainRequest` containing model config and dataset info
@@ -31,7 +34,7 @@ class BaseTrainingService(ABC):
 
     def _setup_wandb(
         self, config: Optional[WandbConfig], job_id: Optional[str] = None
-    ) -> tuple[str, str]:
+    ) -> Tuple[str, str]:
         """
         Setup WandB and return (report_to, wandb_url).
         Handles WandB login and initialization for experiment tracking.
@@ -73,7 +76,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
     Handles model setup, dataset preparation, training, and artifact export.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Import HF libraries only when this service is instantiated
         from transformers import (
             AutoTokenizer,
@@ -100,7 +103,9 @@ class HuggingFaceTrainingService(BaseTrainingService):
         else:
             self.torch_dtype = torch.float16
 
-    def run_training(self, req: TrainRequest, job_tracker=None) -> dict:
+    def run_training(
+        self, req: TrainRequest, job_tracker: JobTracker
+    ) -> Dict[str, Any]:
         """
         Orchestrate full training workflow and return result.
         Handles all steps from dataset download to model export for HuggingFace models.
@@ -130,9 +135,9 @@ class HuggingFaceTrainingService(BaseTrainingService):
                 model_cfg,
                 job_id,
                 req.export,
+                job_tracker,
                 req.hf_repo_id,
                 req.wandb_config,
-                job_tracker,
             )
 
             logging.info(f"Training completed successfully for job {job_id}")
@@ -147,14 +152,14 @@ class HuggingFaceTrainingService(BaseTrainingService):
 
     def _run_training_core(
         self,
-        processed_dataset_id,
-        model_config,
-        job_id,
-        export,
-        hf_repo_id=None,
-        wandb_config=None,
-        job_tracker=None,
-    ):
+        processed_dataset_id: str,
+        model_config: Dict[str, Any],
+        job_id: str,
+        export: str,
+        job_tracker: JobTracker,
+        hf_repo_id: Optional[str] = None,
+        wandb_config: Optional[WandbConfig] = None,
+    ) -> Dict[str, Any]:
         """
         Core training logic for HuggingFace models.
         Handles dataset download, model/tokenizer setup, LoRA config, training, and export.
@@ -172,8 +177,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
         Returns:
             dict: Contains `adapter_path` and `base_model_id` of the trained model
         """
-        if job_tracker:
-            job_tracker.preparing("Preparing HuggingFace training...")
+        job_tracker.preparing()
 
         # 1. Download processed dataset
         train_dataset, eval_dataset = storage_service.download_processed_dataset(
@@ -229,26 +233,27 @@ class HuggingFaceTrainingService(BaseTrainingService):
         )
 
         # Progress tracking: start actual training with WandB URL
-        if job_tracker:
-            job_tracker.training(wandb_url)
+        job_tracker.training(wandb_url)
 
         trainer.train()
 
         # Use storage strategy to save model
-        storage_strategy = StorageStrategyFactory.create_strategy(
-            export, storage_service=storage_service
-        )
-        artifact = storage_strategy.save_model(
-            model,
-            tokenizer,
-            f"/tmp/{job_id}_adapter",
-            {
-                "job_id": job_id,
-                "base_model_id": model_config.get("base_model_id"),
-                "use_unsloth": False,
-                "hf_repo_id": hf_repo_id,
-            },
-        )
+        try:
+            storage_strategy = StorageStrategyFactory.create_strategy(export)
+            artifact = storage_strategy.save_model(
+                model,
+                tokenizer,
+                f"/tmp/{job_id}_adapter",
+                {
+                    "job_id": job_id,
+                    "base_model_id": model_config.get("base_model_id"),
+                    "use_unsloth": False,
+                    "hf_repo_id": hf_repo_id,
+                },
+            )
+        except Exception as e:
+            logging.error(f"Failed to save model: {str(e)}", exc_info=True)
+            raise e
 
         # 7. Cleanup
         storage_strategy.cleanup(artifact)
@@ -256,12 +261,16 @@ class HuggingFaceTrainingService(BaseTrainingService):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+        job_tracker.completed(artifact.remote_path, artifact.base_model_id)
+
         return {
             "adapter_path": artifact.remote_path,
             "base_model_id": artifact.base_model_id,
         }
 
-    def _setup_model(self, base_model_id, method, use_fa2):
+    def _setup_model(
+        self, base_model_id: str, method: str, use_fa2: bool
+    ) -> Tuple[Any, Any]:
         """
         Setup and return the base model and tokenizer for training.
         Applies quantization and attention optimizations as needed.
@@ -318,7 +327,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
 
         return model, tokenizer
 
-    def _setup_peft_with_lora(self, model, model_config):
+    def _setup_peft_with_lora(self, model: Any, model_config: Dict[str, Any]) -> Any:
         """
         Setup PEFT with LoRA configuration for the model.
         Returns a PEFT-wrapped model ready for training.
@@ -350,7 +359,9 @@ class HuggingFaceTrainingService(BaseTrainingService):
 
         return self.get_peft_model(model, lora_config)
 
-    def _setup_training_args(self, model_config, job_id, report_to="none"):
+    def _setup_training_args(
+        self, model_config: Dict[str, Any], job_id: str, report_to: str = "none"
+    ) -> Any:
         """
         Setup training arguments for SFTTrainer.
         Returns a SFTConfig object with all training hyperparameters.
@@ -393,7 +404,6 @@ class HuggingFaceTrainingService(BaseTrainingService):
             learning_rate=model_config.get("learning_rate", 2e-4),
             # Packing packs the tokenized sequences to max_len
             packing=model_config.get("packing", True),
-            padding_free=True if model_config.get("use_fa2", False) else False,
             fp16=fp16,
             bf16=bf16,
             optim="adamw_torch_fused",
@@ -405,7 +415,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
             report_to=report_to,
         )
 
-    def _prepare_hf_dataset(self, dataset, tokenizer):
+    def _prepare_hf_dataset(self, dataset: Any, tokenizer: Any) -> Any:
         """
         Prepare dataset for HuggingFace SFTTrainer format.
         Ensures the dataset is in the correct conversational format for training.
@@ -440,7 +450,7 @@ class UnslothTrainingService(BaseTrainingService):
     Handles model setup, dataset formatting, training, and artifact export.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Import Unsloth libraries only when this service is instantiated
         import unsloth
         from unsloth import FastModel
@@ -465,6 +475,8 @@ class UnslothTrainingService(BaseTrainingService):
             "unsloth/gemma-3-4b-it-unsloth-bnb-4bit",
             "unsloth/gemma-3-12b-it-unsloth-bnb-4bit",
             "unsloth/gemma-3-27b-it-unsloth-bnb-4bit",
+            "unsloth/gemma-3n-E4B-it-unsloth-bnb-4bit",
+            "unsloth/gemma-3n-E2B-it-unsloth-bnb-4bit",
         ]
 
         if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
@@ -472,7 +484,9 @@ class UnslothTrainingService(BaseTrainingService):
         else:
             self.torch_dtype = torch.float16
 
-    def run_training(self, req: TrainRequest, job_tracker=None) -> dict:
+    def run_training(
+        self, req: TrainRequest, job_tracker: JobTracker
+    ) -> Dict[str, Any]:
         """
         Orchestrate full Unsloth training workflow and return result.
         Handles all steps from dataset download to model export for Unsloth models.
@@ -504,9 +518,9 @@ class UnslothTrainingService(BaseTrainingService):
                 model_cfg,
                 job_id,
                 req.export,
+                job_tracker,
                 req.hf_repo_id,
                 req.wandb_config,
-                job_tracker,
             )
 
             logging.info(f"Unsloth training completed successfully for job {job_id}")
@@ -521,14 +535,14 @@ class UnslothTrainingService(BaseTrainingService):
 
     def _run_training_core(
         self,
-        processed_dataset_id,
-        model_config,
-        job_id,
-        export,
-        hf_repo_id=None,
-        wandb_config=None,
-        job_tracker=None,
-    ):
+        processed_dataset_id: str,
+        model_config: Dict[str, Any],
+        job_id: str,
+        export: str,
+        job_tracker: JobTracker,
+        hf_repo_id: Optional[str] = None,
+        wandb_config: Optional[WandbConfig] = None,
+    ) -> Dict[str, Any]:
         """
         Core training logic for Unsloth models.
         Handles dataset download, model/tokenizer setup, training, and export.
@@ -546,8 +560,7 @@ class UnslothTrainingService(BaseTrainingService):
         Returns:
             dict: Contains `adapter_path` and `base_model_id` of the trained model
         """
-        if job_tracker:
-            job_tracker.preparing("Preparing Unsloth training...")
+        job_tracker.preparing()
 
         # 1. Download processed dataset
         train_dataset, eval_dataset = storage_service.download_processed_dataset(
@@ -556,7 +569,8 @@ class UnslothTrainingService(BaseTrainingService):
 
         # 2. Setup model and tokenizer with Unsloth
         model, tokenizer = self._setup_unsloth_model(
-            model_config.get("base_model_id"), model_config
+            model_config.get("base_model_id", "unsloth/gemma-3-1b-it-unsloth-bnb-4bit"),
+            model_config,
         )
 
         # 3. Prepare dataset for Unsloth format
@@ -595,26 +609,27 @@ class UnslothTrainingService(BaseTrainingService):
         )
 
         # Progress tracking: start actual training with WandB URL
-        if job_tracker:
-            job_tracker.training(wandb_url)
+        job_tracker.training(wandb_url)
 
         trainer.train()
 
         # Use storage strategy to save model
-        storage_strategy = StorageStrategyFactory.create_strategy(
-            export, storage_service=storage_service
-        )
-        artifact = storage_strategy.save_model(
-            model,
-            tokenizer,
-            f"/tmp/{job_id}_adapter",
-            {
-                "job_id": job_id,
-                "base_model_id": model_config.get("base_model_id"),
-                "use_unsloth": True,
-                "hf_repo_id": hf_repo_id,
-            },
-        )
+        try:
+            storage_strategy = StorageStrategyFactory.create_strategy(export)
+            artifact = storage_strategy.save_model(
+                model,
+                tokenizer,
+                f"/tmp/{job_id}_adapter",
+                {
+                    "job_id": job_id,
+                    "base_model_id": model_config.get("base_model_id"),
+                    "use_unsloth": True,
+                    "hf_repo_id": hf_repo_id,
+                },
+            )
+        except Exception as e:
+            logging.error(f"Failed to save model: {str(e)}", exc_info=True)
+            raise e
 
         # 7. Cleanup
         storage_strategy.cleanup(artifact)
@@ -622,12 +637,16 @@ class UnslothTrainingService(BaseTrainingService):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+        job_tracker.completed(artifact.remote_path, artifact.base_model_id)
+
         return {
             "adapter_path": artifact.remote_path,
             "base_model_id": artifact.base_model_id,
         }
 
-    def _setup_unsloth_model(self, base_model_id, model_config):
+    def _setup_unsloth_model(
+        self, base_model_id: str, model_config: Dict[str, Any]
+    ) -> Tuple[Any, Any]:
         """
         Setup Unsloth model and tokenizer for training or inference.
         Applies quantization and chat template configuration.
@@ -639,6 +658,11 @@ class UnslothTrainingService(BaseTrainingService):
         Returns:
             tuple: (model, tokenizer) - the initialized model and tokenizer
         """
+        # Check supported models
+        if base_model_id not in self.fourbit_models:
+            raise ValueError(
+                f"Model {base_model_id} is not supported. Supported models: {self.fourbit_models}"
+            )
 
         # Load base model with Unsloth
         # NOTE: Since we used 4 bit bnb for HF QLoRA training we keep it consistent here
@@ -688,7 +712,7 @@ class UnslothTrainingService(BaseTrainingService):
 
         return model, tokenizer
 
-    def _prepare_unsloth_dataset(self, dataset, tokenizer):
+    def _prepare_unsloth_dataset(self, dataset: Any, tokenizer: Any) -> Any:
         """
         Prepare dataset for Unsloth training format.
         Standardizes and formats the dataset for Unsloth SFTTrainer.
@@ -727,7 +751,9 @@ class UnslothTrainingService(BaseTrainingService):
         dataset = dataset.map(formatting_prompts_func, batched=True)
         return dataset
 
-    def _setup_unsloth_training_args(self, model_config, job_id, report_to="none"):
+    def _setup_unsloth_training_args(
+        self, model_config: Dict[str, Any], job_id: str, report_to: str = "none"
+    ) -> Any:
         """
         Setup training arguments for Unsloth SFTTrainer.
         Returns a SFTConfig object with all training hyperparameters.
@@ -760,7 +786,6 @@ class UnslothTrainingService(BaseTrainingService):
             max_steps=model_config.get("max_steps", -1),
             learning_rate=model_config.get("learning_rate", 2e-4),
             packing=model_config.get("packing", True),
-            padding_free=True if model_config.get("use_fa2", False) else False,
             fp16=fp16,
             bf16=bf16,
             optim="adamw_8bit",
@@ -779,7 +804,7 @@ class TrainingService:
     Provides unified interface for running training jobs with different frameworks.
     """
 
-    _providers = {
+    _providers: Dict[str, Any] = {
         "huggingface": HuggingFaceTrainingService,
         "unsloth": UnslothTrainingService,
     }
@@ -813,7 +838,7 @@ class TrainingService:
         return service_class()
 
     @classmethod
-    def list_providers(cls) -> list:
+    def list_providers(cls) -> List[str]:
         """
         List all supported training providers.
 

@@ -22,14 +22,7 @@ RUN pip install --no-cache-dir uv
 # Copy requirements and install Python dependencies using UV
 COPY pyproject.toml uv.lock ./
 
-# Install PyTorch with CUDA support first, then remaining dependencies, then force CUDA again
-RUN uv venv && \
-    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 && \
-    uv sync --frozen --no-cache --verbose && \
-    uv pip install --upgrade --force-reinstall unsloth unsloth_zoo && \
-    uv pip list
-
-RUN uv pip install --force-reinstall "xformers<0.0.27"
+RUN uv venv && uv sync --frozen --no-cache && uv pip list
 
 # Copy application code
 COPY . .

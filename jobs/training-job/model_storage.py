@@ -54,28 +54,31 @@ class CloudStorageService:
         Returns:
             str: GCS URI where the model artifacts are stored
         """
-        bucket = self.storage_client.bucket(self.export_bucket)
-        prefix = f"trained_adapters/{metadata.job_id}"
-
-        # upload adapter files
-        for root, dirs, files in os.walk(model_dir):
-            for fn in files:
-                src = os.path.join(root, fn)
-                rel = os.path.relpath(src, model_dir)
-                blob = bucket.blob(f"{prefix}/{rel}")
-                blob.upload_from_filename(src)
-
-        # upload metadata/config.json
-        meta_dict = {
-            "job_id": metadata.job_id,
-            "base_model_id": metadata.base_model_id,
-            "use_unsloth": metadata.use_unsloth,
-        }
-
-        blob = bucket.blob(f"{prefix}/config.json")
-        blob.upload_from_string(json.dumps(meta_dict), content_type="application/json")
-
-        return f"gs://{self.export_bucket}/{prefix}/"
+        try:
+            bucket = self.storage_client.bucket(self.export_bucket)
+            prefix = f"trained_adapters/{metadata.job_id}"
+            for root, dirs, files in os.walk(model_dir):
+                for fn in files:
+                    src = os.path.join(root, fn)
+                    rel = os.path.relpath(src, model_dir)
+                    blob = bucket.blob(f"{prefix}/{rel}")
+                    blob.upload_from_filename(src)
+            meta_dict = {
+                "job_id": metadata.job_id,
+                "base_model_id": metadata.base_model_id,
+                "use_unsloth": metadata.use_unsloth,
+            }
+            blob = bucket.blob(f"{prefix}/config.json")
+            blob.upload_from_string(
+                json.dumps(meta_dict), content_type="application/json"
+            )
+            return f"gs://{self.export_bucket}/{prefix}/"
+        except Exception as e:
+            logger.error(
+                f"Error uploading model artifacts to GCS for job {metadata.job_id}: {e}",
+                exc_info=True,
+            )
+            raise
 
     def download_model(
         self, job_id: str, local_dir: Optional[str] = None
@@ -91,39 +94,38 @@ class CloudStorageService:
         Returns:
             CloudStoredModelMetadata: Metadata object with job details and local path
         """
-        bucket = self.storage_client.bucket(self.export_bucket)
-        prefix = f"trained_adapters/{job_id}"
-
-        # fetch metadata
-        config_blob = bucket.blob(f"{prefix}/config.json")
-        if not config_blob.exists():
-            raise FileNotFoundError("Adapter config not found")
-        meta = json.loads(config_blob.download_as_text())
-
-        # prepare local directory
-        if not local_dir:
-            local_dir = f"/tmp/inference_{job_id}"
-        os.makedirs(local_dir, exist_ok=True)
-
-        # download all artifacts
-        for blob in bucket.list_blobs(prefix=prefix):
-            rel = blob.name[len(prefix) + 1 :]
-            if rel == "config.json":
-                continue
-            dst = os.path.join(local_dir, rel)
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            blob.download_to_filename(dst)
-
-        # build metadata object
-        metadata = CloudStoredModelMetadata(
-            job_id=job_id,
-            base_model_id=meta.get("base_model_id"),
-            gcs_prefix=prefix,
-            use_unsloth=meta.get("use_unsloth", False),
-            local_dir=local_dir,
-        )
-
-        return metadata
+        try:
+            bucket = self.storage_client.bucket(self.export_bucket)
+            prefix = f"trained_adapters/{job_id}"
+            config_blob = bucket.blob(f"{prefix}/config.json")
+            if not config_blob.exists():
+                logger.error(f"Adapter config not found in GCS for job {job_id}")
+                raise FileNotFoundError("Adapter config not found")
+            meta = json.loads(config_blob.download_as_text())
+            if not local_dir:
+                local_dir = f"/tmp/inference_{job_id}"
+            os.makedirs(local_dir, exist_ok=True)
+            for blob in bucket.list_blobs(prefix=prefix):
+                rel = blob.name[len(prefix) + 1 :]
+                if rel == "config.json":
+                    continue
+                dst = os.path.join(local_dir, rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                blob.download_to_filename(dst)
+            metadata = CloudStoredModelMetadata(
+                job_id=job_id,
+                base_model_id=meta.get("base_model_id"),
+                gcs_prefix=prefix,
+                use_unsloth=meta.get("use_unsloth", False),
+                local_dir=local_dir,
+            )
+            return metadata
+        except Exception as e:
+            logger.error(
+                f"Error downloading model artifacts from GCS for job {job_id}: {e}",
+                exc_info=True,
+            )
+            raise
 
     def download_processed_dataset(self, processed_dataset_id: str):
         """
@@ -247,7 +249,7 @@ class GCSStorageStrategy(ModelStorageStrategy):
     """
 
     def __init__(self, storage_service):
-        self.storage_service = storage_service
+        self.storage_service: CloudStorageService = storage_service
 
     def save_model(
         self, model, tokenizer, local_path: str, metadata: Dict[str, Any]
@@ -306,7 +308,7 @@ class GCSStorageStrategy(ModelStorageStrategy):
         return ModelArtifact(
             base_model_id=meta.base_model_id,
             job_id=meta.job_id,
-            local_path=meta.local_dir,
+            local_path=meta.local_dir or "",
             remote_path=f"gs://{self.storage_service.export_bucket}/{meta.gcs_prefix}/",
             use_unsloth=meta.use_unsloth,
             metadata={"gcs_prefix": meta.gcs_prefix},
@@ -345,8 +347,16 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
         logging.info(f"Pushing model to Hugging Face Hub at {hf_repo_id}")
 
         # Direct model push (for Unsloth/base models)
-        model.push_to_hub(hf_repo_id, private=True)
-        tokenizer.push_to_hub(hf_repo_id, private=True)
+        # NOTE: This is mainly because sometimes it has "SFTTrainer.create_model_card() got an unexpected keyword argument 'private'" error
+        try:
+            model.push_to_hub(hf_repo_id, private=True)
+            tokenizer.push_to_hub(hf_repo_id, private=True)
+        except Exception as e:
+            logging.error(
+                f"Failed to push model to HuggingFace Hub: {str(e)}, trying again with public repo"
+            )
+            model.push_to_hub(hf_repo_id)
+            tokenizer.push_to_hub(hf_repo_id)
 
         # Save additional metadata
         training_config = {
@@ -453,7 +463,7 @@ class StorageStrategyFactory:
             ValueError: If storage_type is not supported
         """
         if storage_type == "gcs":
-            return GCSStorageStrategy(kwargs.get("storage_service"))
+            return GCSStorageStrategy(storage_service=storage_service)
         elif storage_type == "hfhub":
             return HuggingFaceHubStrategy()
         else:
