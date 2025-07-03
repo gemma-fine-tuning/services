@@ -3,8 +3,13 @@ import logging
 from fastapi import FastAPI, HTTPException
 from google.cloud import firestore
 from huggingface_hub import login
-from schema import InferenceRequest, InferenceResponse
-from inference_service import run_inference
+from schema import (
+    InferenceRequest,
+    InferenceResponse,
+    BatchInferenceRequest,
+    BatchInferenceResponse,
+)
+from inference_service import run_inference, run_batch_inference
 from typing import Optional
 
 app = FastAPI(
@@ -41,21 +46,43 @@ def login_hf(hf_token: Optional[str]):
         logging.warning("HF Token not provided. Hugging Face login skipped.")
 
 
-@app.post("/inference/{job_id}", response_model=InferenceResponse)
-async def inference(job_id: str, request: InferenceRequest):
+@app.post("/inference", response_model=InferenceResponse)
+async def inference(request: InferenceRequest):
     """Run inference using a trained adapter"""
     prompt = request.prompt
+    job_id_or_repo_id = request.job_id_or_repo_id
     if not prompt:
         raise HTTPException(status_code=400, detail="prompt is required")
-
+    if not job_id_or_repo_id:
+        raise HTTPException(status_code=400, detail="job_id_or_repo_id is required")
     try:
         login_hf(request.hf_token)
-        output = run_inference(job_id, prompt, request.storage_type)
+        output = run_inference(job_id_or_repo_id, prompt, request.storage_type)
         return {"result": output}
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Adapter not found")
     except Exception as e:
         logging.error(f"Inference failed with error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/batch_inference", response_model=BatchInferenceResponse)
+async def batch_inference(request: BatchInferenceRequest):
+    """Run batch inference using a trained adapter"""
+    prompts = request.prompts
+    job_id_or_repo_id = request.job_id_or_repo_id
+    if not prompts or not isinstance(prompts, list) or len(prompts) == 0:
+        raise HTTPException(status_code=400, detail="prompts (list) is required")
+    if not job_id_or_repo_id:
+        raise HTTPException(status_code=400, detail="job_id_or_repo_id is required")
+    try:
+        login_hf(request.hf_token)
+        outputs = run_batch_inference(job_id_or_repo_id, prompts, request.storage_type)
+        return {"results": outputs}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Adapter not found")
+    except Exception as e:
+        logging.error(f"Batch inference failed with error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
