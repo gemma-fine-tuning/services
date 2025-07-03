@@ -288,7 +288,9 @@ class HuggingFaceTrainingService(BaseTrainingService):
             "google/gemma-3-1b-it",
             "google/gemma-3-4b-it",
             "google/gemma-3-12b-it",
-            "google/gemma-3-27b-it",
+            # "google/gemma-3-27b-it",
+            "google/gemma-3n-E2B-it",
+            "google/gemma-3n-E4B-it",
         ]
 
         if base_model_id not in supported_models:
@@ -474,7 +476,7 @@ class UnslothTrainingService(BaseTrainingService):
             "unsloth/gemma-3-1b-it-unsloth-bnb-4bit",
             "unsloth/gemma-3-4b-it-unsloth-bnb-4bit",
             "unsloth/gemma-3-12b-it-unsloth-bnb-4bit",
-            "unsloth/gemma-3-27b-it-unsloth-bnb-4bit",
+            # "unsloth/gemma-3-27b-it-unsloth-bnb-4bit",
             "unsloth/gemma-3n-E4B-it-unsloth-bnb-4bit",
             "unsloth/gemma-3n-E2B-it-unsloth-bnb-4bit",
         ]
