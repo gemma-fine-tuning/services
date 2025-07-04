@@ -32,8 +32,7 @@ class WandbConfig(BaseModel):
 class TrainRequest(BaseModel):
     # This struct is shared between the API and the backend service
     processed_dataset_id: str
-    # NOTE: This is marked optional for dev but in deployment it should be required
-    hf_token: Optional[str] = None
+    hf_token: str
     training_config: TrainingConfig
     export: Literal["gcs", "hfhub"] = "gcs"
     # If export is hfhub, this is the Hugging Face repo ID to push the model to
@@ -41,15 +40,3 @@ class TrainRequest(BaseModel):
 
     # Weights & Biases logging configuration
     wandb_config: Optional[WandbConfig] = None
-
-
-class JobSubmitResponse(BaseModel):
-    job_id: str
-
-
-class JobStatusResponse(BaseModel):
-    status: Literal["queued", "preparing", "training", "completed", "failed"]
-    wandb_url: Optional[str] = None
-    adapter_path: Optional[str] = None
-    base_model_id: Optional[str] = None
-    error: Optional[str] = None
