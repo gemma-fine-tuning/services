@@ -23,18 +23,21 @@ class BaseSplitConfig(BaseModel):
 
 class HFSplitConfig(BaseSplitConfig):
     type: Literal["hf_split"] = "hf_split"
-    splits: Optional[List[str]] = None
+    train_split: str
+    test_split: str
 
 
 class ManualSplitConfig(BaseSplitConfig):
     type: Literal["manual_split"] = "manual_split"
     sample_size: Optional[int] = None
     test_size: Optional[float] = None
+    split: Optional[str] = None
 
 
 class NoSplitConfig(BaseSplitConfig):
     type: Literal["no_split"] = "no_split"
     sample_size: Optional[int] = None
+    split: Optional[str] = None
 
 
 class AugmentationSetupConfig(BaseModel):
@@ -63,6 +66,7 @@ class PreprocessingConfig(BaseModel):
 class PreprocessingRequest(BaseModel):
     dataset_source: Literal["upload", "huggingface"]
     dataset_id: str
+    dataset_subset: Optional[str] = "default"
     config: PreprocessingConfig
 
 

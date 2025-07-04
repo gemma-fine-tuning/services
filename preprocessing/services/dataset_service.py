@@ -177,6 +177,7 @@ class DatasetService:
         dataset_source: str,
         dataset_id: str,
         config: PreprocessingConfig,
+        dataset_subset: Optional[str] = "default",
     ) -> ProcessingResult:
         """
         Process a dataset to ChatML format.
@@ -244,7 +245,9 @@ class DatasetService:
         """
         try:
             # Load dataset with splits
-            dataset = await self.loader.load_dataset(dataset_source, dataset_id, config)
+            dataset = await self.loader.load_dataset(
+                dataset_source, dataset_id, dataset_subset, config
+            )
 
             if not dataset:
                 raise ValueError("Dataset is empty or could not be loaded")

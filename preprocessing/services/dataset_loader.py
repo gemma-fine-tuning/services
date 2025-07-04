@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 from datasets import load_dataset, DatasetDict
 from storage.base import StorageInterface
 from schema import (
@@ -39,7 +40,11 @@ class DatasetLoader:
         self.storage = storage
 
     async def load_dataset(
-        self, dataset_source: str, dataset_id: str, config: PreprocessingConfig
+        self,
+        dataset_source: str,
+        dataset_id: str,
+        config: PreprocessingConfig,
+        dataset_subset: Optional[str] = "default",
     ) -> DatasetDict:
         """
         Load a dataset from the specified source.
@@ -56,7 +61,11 @@ class DatasetLoader:
                 - For 'upload': The file ID of the uploaded dataset
                 - For 'huggingface': The Hugging Face dataset name
             config (PreprocessingConfig): Configuration for processing, including:
-
+                - field_mappings: Mapping of fields to use for the dataset
+                - normalize_whitespace: Whether to normalize whitespace in the dataset
+                - augmentation_config: Configuration for augmentation
+                - split_config: Configuration for splitting the dataset
+            dataset_subset (str): The subset of the dataset to load
 
         Returns:
             DatasetDict: A dictionary with split names as keys and dataset samples as values.
@@ -67,7 +76,7 @@ class DatasetLoader:
             Exception: For other errors during dataset loading.
 
         Example:
-            >>> dataset = await loader.load_dataset("huggingface", "squad", sample_size=100)
+            >>> dataset = await loader.load_dataset("huggingface", "squad", dataset_splits=DatasetSplits(train="train", test="test"), config=PreprocessingConfig(split_config=ManualSplitConfig(sample_size=100, test_size=0.2)))
         """
         if dataset_source == "upload" and isinstance(
             config.split_config, HFSplitConfig
@@ -80,7 +89,9 @@ class DatasetLoader:
             if dataset_source == "upload":
                 return await self._load_uploaded_dataset(dataset_id, config)
             elif dataset_source == "huggingface":
-                return await self._load_huggingface_dataset(dataset_id, config)
+                return await self._load_huggingface_dataset(
+                    dataset_id, dataset_subset, config
+                )
             else:
                 raise ValueError(f"Invalid dataset_source: {dataset_source}")
 
@@ -185,7 +196,7 @@ class DatasetLoader:
                 return dataset
 
     async def _load_huggingface_dataset(
-        self, dataset_name: str, config: PreprocessingConfig
+        self, dataset_name: str, dataset_subset: str, config: PreprocessingConfig
     ) -> DatasetDict:
         """
         Load a dataset from Hugging Face's dataset hub.
@@ -209,17 +220,27 @@ class DatasetLoader:
             >>> dataset = await loader._load_huggingface_dataset("squad", config)
         """
         try:
-            # No split configuration - just get train split
             if isinstance(config.split_config, NoSplitConfig):
-                dataset = load_dataset(dataset_name, split="train")
+                if not config.split_config.split:
+                    raise ValueError("No split specified")
+
+                dataset = load_dataset(
+                    dataset_name, dataset_subset, split=config.split_config.split
+                )
+
                 sample_size = config.split_config.sample_size
                 if sample_size and dataset.num_rows > sample_size:
                     dataset = dataset.shuffle(seed=42).select(range(sample_size))
                 return DatasetDict({"train": dataset})
 
-            # Manual split configuration - get train split, sample it, then split into train/test
             elif isinstance(config.split_config, ManualSplitConfig):
-                dataset = load_dataset(dataset_name, split="train")
+                if not config.split_config.split:
+                    raise ValueError("No split specified")
+
+                dataset = load_dataset(
+                    dataset_name, dataset_subset, split=config.split_config.split
+                )
+
                 sample_size = config.split_config.sample_size
                 test_size = config.split_config.test_size
 
@@ -252,17 +273,26 @@ class DatasetLoader:
                 else:
                     return DatasetDict({"train": dataset})
 
-            # HF split configuration - get all specified splits
             elif isinstance(config.split_config, HFSplitConfig):
-                splits = config.split_config.splits
+                if (
+                    not config.split_config.train_split
+                    or not config.split_config.test_split
+                ):
+                    raise ValueError("No train or test split specified")
 
-                # if no splits are provided, return all splits
-                if not splits:
-                    dataset = load_dataset(dataset_name)
-                    return dataset
-                else:
-                    dataset = load_dataset(dataset_name, split=splits)
-                    return dataset
+                train_dataset = load_dataset(
+                    dataset_name,
+                    dataset_subset,
+                    split=config.split_config.train_split,
+                )
+
+                test_dataset = load_dataset(
+                    dataset_name,
+                    dataset_subset,
+                    split=config.split_config.test_split,
+                )
+
+                return DatasetDict({"train": train_dataset, "test": test_dataset})
 
             else:
                 raise ValueError("Invalid split configuration")
