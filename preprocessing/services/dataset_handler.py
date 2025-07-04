@@ -5,7 +5,7 @@ import logging
 from typing import Optional, Dict
 from werkzeug.utils import secure_filename
 from storage.base import StorageInterface
-from schema import DatasetUploadResponse
+from schema import DatasetUploadResponse, PreprocessingConfig
 from datasets import DatasetDict
 import pandas as pd
 import io
@@ -174,13 +174,19 @@ class DatasetHandler:
             raise
 
     async def upload_processed_dataset(
-        self, dataset: DatasetDict, dataset_id: str
+        self,
+        dataset: DatasetDict,
+        dataset_name: str,
+        dataset_id: str,
+        dataset_subset: str,
+        config: PreprocessingConfig,
+        dataset_source: str,
     ) -> str:
         """
         Upload a processed dataset to the storage.
         The directory structure is as follows:
         - processed_datasets/
-            - dataset_id/
+            - dataset_name/
                 - split_name.parquet (all splits are saved in the same directory)
                 - metadata.json (contains the metadata of the dataset)
 
@@ -197,16 +203,20 @@ class DatasetHandler:
         if not dataset:
             raise ValueError("Dataset is empty")
 
-        if not dataset_id:
-            raise ValueError("Dataset ID is required")
+        if not dataset_name:
+            raise ValueError("Dataset name is required")
 
         metadata = {
-            "dataset_id": dataset_id,
+            "dataset_name": dataset_name,
             "upload_type": "processed_upload",
             "upload_date": datetime.now().isoformat(),
+            "config": config.dict(),
+            "dataset_id": dataset_id,
+            "dataset_subset": dataset_subset,
+            "dataset_source": dataset_source,
         }
 
-        base_blob_name = f"processed_datasets/{dataset_id}"
+        base_blob_name = f"processed_datasets/{dataset_name}"
 
         for split_name, split_dataset in dataset.items():
             buf = io.BytesIO()
@@ -225,3 +235,17 @@ class DatasetHandler:
         dataset_path = metadata_path.replace("metadata.json", "")
 
         return dataset_path
+
+    async def does_dataset_exist(self, dataset_name: str) -> bool:
+        """
+        Check if a processed dataset exists in storage.
+
+        Args:
+            dataset_name (str): Name of the dataset to check
+
+        Returns:
+            bool: True if the dataset exists in processed_datasets/, False otherwise
+        """
+        dataset_path = f"processed_datasets/{dataset_name}"
+        exists = self.storage.file_exists(dataset_path)
+        return exists

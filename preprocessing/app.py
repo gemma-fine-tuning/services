@@ -91,6 +91,7 @@ async def process_dataset(request: PreprocessingRequest):
     """
     try:
         result = await dataset_service.process_dataset(
+            dataset_name=request.dataset_name,
             dataset_source=request.dataset_source,
             dataset_id=request.dataset_id,
             dataset_subset=request.dataset_subset,

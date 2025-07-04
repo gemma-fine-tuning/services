@@ -1,4 +1,3 @@
-import uuid
 import logging
 from typing import List, Dict, Optional
 from storage.base import StorageInterface
@@ -104,6 +103,7 @@ class DatasetService:
 
     async def process_dataset(
         self,
+        dataset_name: str,
         dataset_source: str,
         dataset_id: str,
         config: PreprocessingConfig,
@@ -121,6 +121,7 @@ class DatasetService:
         6. Returns processing results
 
         Args:
+            dataset_name (str): The name of the dataset, used for the processed dataset name
             dataset_source (str): The source of the dataset
             dataset_id (str): The identifier for the dataset
             config (PreprocessingConfig): Configuration for processing, including:
@@ -166,14 +167,19 @@ class DatasetService:
             ...     }
             ... )
             >>> result = await service.process_dataset(
+            ...     "my_dataset",
             ...     "upload",
             ...     "my_dataset_id",
             ...     config,
             ...     split_config=HFSplitConfig(type="hf_split", splits=["train", "test"]),
             ... )
-            >>> result = await service.process_dataset("upload", "my_dataset", config)
         """
         try:
+            if await self.handler.does_dataset_exist(dataset_name):
+                raise ValueError(
+                    f"Dataset {dataset_name} already exists. Please use a different name."
+                )
+
             # Load dataset with splits
             dataset = await self.loader.load_dataset(
                 dataset_source, dataset_id, config, dataset_subset
@@ -196,11 +202,14 @@ class DatasetService:
                     processed_dataset, augmentation_config
                 )
 
-            processed_id = str(uuid.uuid4())
-
             # Save all splits
             dataset_path = await self.handler.upload_processed_dataset(
-                processed_dataset, processed_id
+                processed_dataset,
+                dataset_name,
+                dataset_id,
+                dataset_subset,
+                config,
+                dataset_source,
             )
 
             splits = {}
@@ -213,7 +222,7 @@ class DatasetService:
             }
 
             return ProcessingResult(
-                processed_dataset_id=processed_id,
+                processed_dataset_name=dataset_name,
                 dataset_path=dataset_path,
                 splits=splits,
                 sample_comparison=sample_comparison,

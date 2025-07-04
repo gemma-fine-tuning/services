@@ -64,6 +64,7 @@ class PreprocessingConfig(BaseModel):
 
 
 class PreprocessingRequest(BaseModel):
+    dataset_name: str
     dataset_source: Literal["upload", "huggingface"]
     dataset_id: str
     dataset_subset: Optional[str] = "default"
@@ -71,7 +72,7 @@ class PreprocessingRequest(BaseModel):
 
 
 class ProcessingResult(BaseModel):
-    processed_dataset_id: str
+    processed_dataset_name: str
     dataset_path: str
     splits: Dict[str, int]  # split_name -> num_rows
     sample_comparison: Dict[str, Any]  # Only one sample from train split
