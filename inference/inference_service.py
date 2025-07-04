@@ -79,6 +79,9 @@ class InferenceService:
                 outputs = self._run_batch_inference_transformers(
                     base_model_id, adapter_path, prompts
                 )
+        except Exception as e:
+            logging.error(f"Batch inference failed with error: {str(e)}", exc_info=True)
+            raise e
         finally:
             strategy.cleanup(artifact)
             if torch.cuda.is_available():
@@ -99,7 +102,7 @@ class InferenceService:
             AutoTokenizer,
         )
         from transformers.utils.quantization_config import BitsAndBytesConfig
-        from peft import PeftModel
+        # from peft import PeftModel
 
         model_kwargs = {
             "torch_dtype": torch.float16
@@ -111,15 +114,16 @@ class InferenceService:
 
         if base_model_id == "google/gemma-3-1b-it":
             model = AutoModelForCausalLM.from_pretrained(
-                base_model_id,
+                adapter_path,  # We can use adapter_path directly because it is either local or hf repo, no need base_model_id
                 **model_kwargs,
             )
         else:
             model = AutoModelForImageTextToText.from_pretrained(
-                base_model_id,
+                adapter_path,
                 **model_kwargs,
             )
-        model = PeftModel.from_pretrained(model, adapter_path)
+        # NOTE: We no longer need to explicitly add adapter / peft, since the adapter_config.json should specify that
+        # model = PeftModel.from_pretrained(model, adapter_path)
         tokenizer = AutoTokenizer.from_pretrained(base_model_id)
 
         # NOTE: This does not tokenize but only changes each raw input into
@@ -167,12 +171,12 @@ class InferenceService:
         from unsloth import FastModel
         from unsloth.chat_templates import get_chat_template
 
+        # Directly load the adapter with base model from hub to avoid issues with PEFT config
         model, tokenizer = FastModel.from_pretrained(
-            model_name=base_model_id,
+            model_name=adapter_path,
             max_seq_length=2048,
             load_in_4bit=True,  # For consistency we load both HF and unsloth in 4 bits!
         )
-        model.load_adapter(adapter_path)
         FastModel.for_inference(model)
         tokenizer = get_chat_template(tokenizer, chat_template="gemma-3")
         tokenizer.pad_token = tokenizer.eos_token
