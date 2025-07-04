@@ -176,7 +176,7 @@ class DatasetService:
         try:
             # Load dataset with splits
             dataset = await self.loader.load_dataset(
-                dataset_source, dataset_id, dataset_subset, config
+                dataset_source, dataset_id, config, dataset_subset
             )
 
             if not dataset:
