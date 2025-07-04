@@ -86,21 +86,6 @@ class DatasetInfoResponse(BaseModel):
     dataset_type: Literal["raw", "processed"]
 
 
-class PreviewRequest(BaseModel):
-    dataset_source: Literal["upload", "huggingface"]
-    dataset_id: str
-    sample_size: int = 5
-    config: PreprocessingConfig
-
-
-class PreviewResponse(BaseModel):
-    original_samples: List[Dict[str, Any]]
-    converted_samples: List[Dict[str, Any]]
-    conversion_success: bool
-    samples_converted: int
-    samples_failed: int
-
-
 class ValidationResponse(BaseModel):
     is_valid: bool
     errors: List[str]

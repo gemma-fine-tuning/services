@@ -108,7 +108,6 @@ gcloud run deploy preprocessing-service \
 - 🔄 Data augmentation capabilities
 - 🔄 Quality metrics and validation
 - 🔄 Schema auto-detection
-- 🔄 Preview functionality
 
 ## API Documentation
 

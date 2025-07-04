@@ -11,7 +11,6 @@ from schema import (
     ProcessingResult,
     DatasetInfoResponse,
     PreprocessingConfig,
-    PreviewResponse,
 )
 from datasets import Dataset
 
@@ -30,7 +29,6 @@ class DatasetService:
 
     The service provides high-level operations for:
     - Uploading datasets
-    - Previewing dataset processing
     - Processing datasets to ChatML format
     - Managing processed datasets
 
@@ -103,74 +101,6 @@ class DatasetService:
             ... )
         """
         return await self.handler.upload_dataset(file_data, filename, metadata)
-
-    async def preview_processing(
-        self,
-        dataset_source: str,
-        dataset_id: str,
-        config: PreprocessingConfig,
-        num_samples: int = 3,
-    ) -> PreviewResponse:
-        """
-        Preview how the dataset would look after processing.
-
-        This method provides a preview of the dataset processing by:
-        - Loading a sample of the dataset
-        - Applying the processing configuration
-        - Showing both original and processed samples
-        - Reporting conversion statistics
-
-        Args:
-            dataset_source (str): The source of the dataset
-            dataset_id (str): The identifier for the dataset
-            config (PreprocessingConfig): Configuration for processing, including:
-                - field_mappings: Maps input fields to ChatML roles with type and value:
-                    - type: "column" or "template"
-                    - value: column name or template string with {column} references
-                - include_system: Whether to include system message
-            num_samples (int): Number of samples to include in preview
-
-        Returns:
-            PreviewResponse: An object containing:
-                - original_samples (List[Dict]): Original sample data
-                - converted_samples (List[Dict]): Processed sample data
-                - conversion_success (bool): Whether conversion was successful
-                - samples_converted (int): Number of successfully converted samples
-                - samples_failed (int): Number of failed conversions
-
-        Raises:
-            Exception: If there's an error during preview
-
-        Example:
-            >>> config = PreprocessingConfig(
-            ...     field_mappings={
-            ...         "user_field": {"type": "column", "value": "question"},
-            ...         "assistant_field": {"type": "template", "value": "Answer: {answer}"}
-            ...     }
-            ... )
-            >>> preview = await service.preview_processing(
-            ...     "upload",
-            ...     "my_dataset_id",
-            ...     config,
-            ...     num_samples=3
-            ... )
-        """
-        try:
-            dataset = await self.loader.load_dataset(
-                dataset_source, dataset_id, num_samples
-            )
-
-            config_dict = config.dict()
-
-            preview = self.converter.preview_conversion(
-                dataset, config_dict, num_samples
-            )
-
-            return PreviewResponse(**preview)
-
-        except Exception as e:
-            logger.error(f"Error previewing processing: {str(e)}")
-            raise
 
     async def process_dataset(
         self,

@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import List, Dict, Any
+from typing import Dict, Any
 from datasets import DatasetDict
 
 logger = logging.getLogger(__name__)
@@ -12,8 +12,7 @@ class FormatConverter:
 
     This class provides functionality to convert various dataset formats into the
     ChatML format, which is a standardized format for conversational AI training data.
-    It supports conversion from multiple input formats and includes validation and
-    preview capabilities.
+    It supports conversion from multiple input formats and includes validation.
 
     The ChatML format follows this structure:
     ```json
@@ -222,47 +221,3 @@ class FormatConverter:
             content = self.whitespace_pattern.sub(" ", content).strip()
 
         return str(content)
-
-    def preview_conversion(
-        self, dataset: List[Dict], config: Dict[str, Any], num_samples: int = 3
-    ) -> Dict[str, Any]:
-        """
-        Preview how the dataset would look after conversion to ChatML format.
-
-        This method provides a preview of the conversion process by converting a small
-        sample of the dataset and returning both original and converted examples.
-
-        Args:
-            dataset (List[Dict]): The dataset to preview
-            config (Dict[str, Any]): Configuration for the conversion
-            num_samples (int): Number of samples to include in the preview
-
-        Returns:
-            Dict[str, Any]: Preview results containing:
-                - original_samples (List[Dict]): Original sample data
-                - converted_samples (List[Dict]): Converted sample data
-                - conversion_success (bool): Whether conversion was successful
-                - samples_converted (int): Number of successfully converted samples
-                - samples_failed (int): Number of failed conversions
-
-        Example:
-            >>> preview = converter.preview_conversion(dataset, config, num_samples=2)
-            >>> print(preview['conversion_success'])
-            True
-        """
-        if not dataset:
-            return {"error": "Dataset is empty"}
-
-        # Take a small sample for preview
-        sample_data = dataset[:num_samples]
-
-        # Convert the sample
-        converted_sample = self.convert_to_chatml(sample_data, config)
-
-        return {
-            "original_samples": sample_data,
-            "converted_samples": converted_sample,
-            "conversion_success": len(converted_sample) > 0,
-            "samples_converted": len(converted_sample),
-            "samples_failed": len(sample_data) - len(converted_sample),
-        }

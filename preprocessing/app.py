@@ -1,6 +1,7 @@
 import os
 import logging
 from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from storage import GCSStorageManager, LocalStorageManager
 from services.dataset_service import DatasetService
 from schema import (
@@ -8,8 +9,6 @@ from schema import (
     PreprocessingRequest,
     ProcessingResult,
     DatasetInfoResponse,
-    PreviewRequest,
-    PreviewResponse,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -19,6 +18,14 @@ app = FastAPI(
     title="Gemma Dataset Preprocessing Service",
     version="2.0.0",
     description="A modular service for preprocessing datasets into ChatML format",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 storage_type = os.getenv("STORAGE_TYPE", "local")  # "gcs" or "local"
@@ -63,37 +70,6 @@ async def upload_dataset(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Error uploading dataset: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
-
-
-@app.post("/preview", response_model=PreviewResponse)
-async def preview_processing(request: PreviewRequest):
-    """Preview how the dataset would look after processing
-
-    The preview shows how the dataset would be converted to ChatML format using the provided configuration.
-    The configuration can include field mappings that specify either direct column mappings or template strings
-    with column references.
-
-    Example field mappings:
-    ```python
-    {
-        "system_field": {"type": "template", "value": "You are a helpful assistant."},
-        "user_field": {"type": "column", "value": "question"},
-        "assistant_field": {"type": "template", "value": "Answer: {answer}"}
-    }
-    ```
-    """
-    try:
-        result = await dataset_service.preview_processing(
-            dataset_source=request.dataset_source,
-            dataset_id=request.dataset_id,
-            config=request.config,
-            num_samples=request.sample_size,
-        )
-        return result
-
-    except Exception as e:
-        logger.error(f"Error previewing processing: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Preview failed: {str(e)}")
 
 
 @app.post("/process", response_model=ProcessingResult)
