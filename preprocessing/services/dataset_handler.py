@@ -214,6 +214,7 @@ class DatasetHandler:
             "dataset_id": dataset_id,
             "dataset_subset": dataset_subset,
             "dataset_source": dataset_source,
+            "created_at": datetime.now().isoformat(),
         }
 
         base_blob_name = f"processed_datasets/{dataset_name}"
