@@ -163,6 +163,7 @@ class DatasetHandler:
                 gcs_path=storage_path,
                 size_bytes=len(file_data),
                 sample=sample,
+                columns=list(sample[0].keys()),
             )
 
         except Exception as e:

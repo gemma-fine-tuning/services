@@ -8,6 +8,7 @@ class DatasetUploadResponse(BaseModel):
     gcs_path: str
     size_bytes: int
     sample: List[Dict[str, Any]]
+    columns: List[str]
 
 
 class FieldMappingConfig(BaseModel):
