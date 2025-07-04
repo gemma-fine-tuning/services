@@ -9,6 +9,7 @@ class DatasetUploadResponse(BaseModel):
     size_bytes: int
     sample: List[Dict[str, Any]]
     columns: List[str]
+    num_examples: int
 
 
 class FieldMappingConfig(BaseModel):

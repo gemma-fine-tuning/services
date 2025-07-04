@@ -155,6 +155,8 @@ class DatasetHandler:
                 pd.read_csv(io.BytesIO(file_data)).head(5).to_dict(orient="records")
             )
 
+            num_examples = len(pd.read_csv(io.BytesIO(file_data)))
+
             print(sample)
 
             return DatasetUploadResponse(
@@ -164,6 +166,7 @@ class DatasetHandler:
                 size_bytes=len(file_data),
                 sample=sample,
                 columns=list(sample[0].keys()),
+                num_examples=num_examples,
             )
 
         except Exception as e:
