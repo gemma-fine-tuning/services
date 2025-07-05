@@ -17,4 +17,8 @@ dependencies = [
     "torch>=2.0.0",
     "sentencepiece>=0.1.99",
     "nltk>=3.8",
+    "sacremoses>=0.1.1",
+    "google-genai>=1.4.0",
+    "python-dotenv>=1.0.0",
+    "pyarrow>=20.0.0",
 ]
