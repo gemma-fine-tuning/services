@@ -92,6 +92,19 @@ class DatasetsInfoResponse(BaseModel):
     datasets: List[DatasetInfoSample]
 
 
+class DatasetInfoFull(BaseModel):
+    dataset_name: str
+    dataset_subset: str
+    dataset_source: Literal["upload", "huggingface"]
+    dataset_id: str
+    created_at: str
+    splits: List[Dict[str, Any]]
+
+
+class DatasetInfoResponse(DatasetInfoFull):
+    pass
+
+
 class ValidationResponse(BaseModel):
     is_valid: bool
     errors: List[str]

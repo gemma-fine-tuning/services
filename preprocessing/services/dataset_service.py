@@ -11,6 +11,7 @@ from schema import (
     PreprocessingConfig,
     DatasetsInfoResponse,
     DatasetInfoSample,
+    DatasetInfoResponse,
 )
 from datasets import Dataset
 import json
@@ -305,6 +306,58 @@ class DatasetService:
 
         except Exception as e:
             logger.error(f"Error getting datasets info: {str(e)}")
+            raise
+
+    async def get_dataset_info(self, dataset_name: str) -> DatasetInfoResponse:
+        """
+        Get information about a dataset including samples from each split.
+        """
+        try:
+            import io
+            import pyarrow.parquet as pq
+
+            metadata_path = f"processed_datasets/{dataset_name}/metadata.json"
+            metadata_content = await self.storage.download_data(metadata_path)
+            metadata = json.loads(metadata_content)
+
+            # Get splits information with samples
+            splits_with_samples = []
+            for split_info in metadata.get("splits", []):
+                split_name = split_info.get("split_name")
+                split_path = f"processed_datasets/{dataset_name}/{split_name}.parquet"
+
+                # Get samples from the split
+                samples = []
+                try:
+                    if self.storage.file_exists(split_path):
+                        split_data = await self.storage.download_binary_data(split_path)
+                        table = pq.read_table(io.BytesIO(split_data))
+                        samples = table.slice(0, 5).to_pylist()
+                except Exception as e:
+                    logger.warning(
+                        f"Could not read samples from split {split_name}: {str(e)}"
+                    )
+
+                splits_with_samples.append(
+                    {
+                        "split_name": split_name,
+                        "num_rows": split_info.get("num_rows", 0),
+                        "path": split_info.get("path", ""),
+                        "samples": samples,
+                    }
+                )
+
+            return DatasetInfoResponse(
+                dataset_name=metadata.get("dataset_name"),
+                dataset_subset=metadata.get("dataset_subset"),
+                dataset_source=metadata.get("dataset_source"),
+                dataset_id=metadata.get("dataset_id"),
+                created_at=metadata.get("upload_date"),
+                splits=splits_with_samples,
+            )
+
+        except Exception as e:
+            logger.error(f"Error getting dataset info: {str(e)}")
             raise
 
     def _augment_split(
