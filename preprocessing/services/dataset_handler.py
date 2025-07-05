@@ -207,6 +207,7 @@ class DatasetHandler:
             raise ValueError("Dataset name is required")
 
         metadata = {
+            "splits": [],
             "dataset_name": dataset_name,
             "upload_type": "processed_upload",
             "upload_date": datetime.now().isoformat(),
@@ -224,10 +225,13 @@ class DatasetHandler:
             split_dataset.to_parquet(buf)
             blob_name = f"{base_blob_name}/{split_name}.parquet"
             split_path = await self.storage.upload_data(buf.getvalue(), blob_name)
-            metadata[split_name] = {
-                "num_rows": split_dataset.num_rows,
-                "path": split_path,
-            }
+            metadata["splits"].append(
+                {
+                    "split_name": split_name,
+                    "num_rows": split_dataset.num_rows,
+                    "path": split_path,
+                }
+            )
 
         metadata_path = await self.storage.upload_data(
             json.dumps(metadata), f"{base_blob_name}/metadata.json"
