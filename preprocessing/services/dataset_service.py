@@ -194,12 +194,12 @@ class DatasetService:
             if not processed_dataset:
                 raise ValueError("No samples could be converted to ChatML format")
 
-            # # Apply data augmentation if the user created a config specification
-            # augmentation_config = config_dict.get("augmentation_config", {})
-            # if augmentation_config:
-            #     processed_dataset = self._apply_augmentation(
-            #         processed_dataset, augmentation_config
-            #     )
+            # Apply data augmentation if the user created a config specification
+            augmentation_config = config_dict.get("augmentation_config", {})
+            if augmentation_config:
+                processed_dataset = self._apply_augmentation(
+                    processed_dataset, augmentation_config
+                )
 
             # Save all splits
             dataset_path = await self.handler.upload_processed_dataset(
