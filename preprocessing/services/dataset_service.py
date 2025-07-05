@@ -8,7 +8,6 @@ from augmentation import run_augment_pipeline
 from schema import (
     DatasetUploadResponse,
     ProcessingResult,
-    DatasetInfoResponse,
     PreprocessingConfig,
 )
 from datasets import Dataset
@@ -195,12 +194,12 @@ class DatasetService:
             if not processed_dataset:
                 raise ValueError("No samples could be converted to ChatML format")
 
-            # Apply data augmentation if the user created a config specification
-            augmentation_config = config_dict.get("augmentation_config", {})
-            if augmentation_config:
-                processed_dataset = self._apply_augmentation(
-                    processed_dataset, augmentation_config
-                )
+            # # Apply data augmentation if the user created a config specification
+            # augmentation_config = config_dict.get("augmentation_config", {})
+            # if augmentation_config:
+            #     processed_dataset = self._apply_augmentation(
+            #         processed_dataset, augmentation_config
+            #     )
 
             # Save all splits
             dataset_path = await self.handler.upload_processed_dataset(
@@ -231,167 +230,6 @@ class DatasetService:
         except Exception as e:
             logger.error(f"Error processing dataset: {str(e)}")
             raise
-
-    async def get_dataset_info(
-        self, dataset_id: str, dataset_type: Optional[str] = None
-    ) -> DatasetInfoResponse:
-        """
-        Get information about a dataset (either raw or processed).
-
-        This method retrieves metadata and sample data for a dataset,
-        including:
-        - Dataset size
-        - Creation time
-        - Storage path
-        - Sample data
-        - Dataset type (raw or processed)
-
-        Args:
-            dataset_id (str): The identifier of the dataset
-            dataset_type (Optional[str]): The type of dataset to look for ("raw" or "processed").
-                If None, will check both types.
-
-        Returns:
-            DatasetInfoResponse: An object containing:
-                - dataset_id (str): The dataset's ID
-                - gcs_path (str): Path where the dataset is stored
-                - size (int): Size of the dataset in bytes
-                - created (str): Creation timestamp
-                - sample (List[Dict]): Sample data from the dataset
-                - dataset_type (str): Type of dataset ("raw" or "processed")
-
-        Raises:
-            FileNotFoundError: If the dataset is not found
-            Exception: For other errors during retrieval
-
-        Example:
-            >>> info = await service.get_dataset_info("123", "raw")
-            >>> print(info.dataset_type)
-            'raw'
-        """
-        try:
-            if dataset_type == "processed":
-                # Look for processed datasets with split suffixes
-                processed_files = self.storage.list_files(
-                    prefix=f"processed_datasets/{dataset_id}_"
-                )
-                if processed_files:
-                    possible_paths = processed_files
-                else:
-                    # Fallback to old format without suffix
-                    processed_path = f"processed_datasets/{dataset_id}.json"
-                    possible_paths = (
-                        [processed_path]
-                        if self.storage.file_exists(processed_path)
-                        else []
-                    )
-            elif dataset_type == "raw":
-                raw_files = self.storage.list_files(
-                    prefix=f"raw_datasets/{dataset_id}_"
-                )
-                possible_paths = raw_files if raw_files else []
-            else:
-                # Check both processed and raw datasets
-                processed_files = self.storage.list_files(
-                    prefix=f"processed_datasets/{dataset_id}_"
-                )
-                raw_files = self.storage.list_files(
-                    prefix=f"raw_datasets/{dataset_id}_"
-                )
-
-                # Also check old processed format
-                old_processed_path = f"processed_datasets/{dataset_id}.json"
-                old_processed_exists = self.storage.file_exists(old_processed_path)
-
-                possible_paths = (
-                    (processed_files if processed_files else [])
-                    + ([old_processed_path] if old_processed_exists else [])
-                    + (raw_files if raw_files else [])
-                )
-
-            blob_name = None
-            for path in possible_paths:
-                if self.storage.file_exists(path):
-                    blob_name = path
-                    break
-
-            if not blob_name:
-                raise FileNotFoundError("Dataset not found")
-
-            dataset_type = "processed" if "processed_datasets" in blob_name else "raw"
-
-            dataset_content = await self.storage.download_data(blob_name)
-            import json
-
-            if blob_name.endswith(".json"):
-                dataset_list = json.loads(dataset_content)
-            else:
-                dataset_list = await self.loader.load_dataset("upload", dataset_id)
-
-            metadata = self.storage.get_metadata(blob_name)
-
-            return DatasetInfoResponse(
-                dataset_id=dataset_id,
-                gcs_path=f"gs://{getattr(self.storage, 'bucket_name', 'local')}/{blob_name}",
-                size=metadata.get("size", 0),
-                created=metadata.get("created", ""),
-                sample=dataset_list[:3] if len(dataset_list) > 3 else dataset_list,
-                dataset_type=dataset_type,
-            )
-
-        except Exception as e:
-            logger.error(f"Error getting dataset info: {str(e)}")
-            raise
-
-    def _apply_augmentation(self, dataset, augmentation_config: Dict):
-        """
-        Apply data augmentation to the dataset using the augmentation pipeline.
-
-        This method handles both single lists and split dictionaries, applying augmentation
-        to each split individually when dealing with split data.
-
-        Args:
-            dataset: The dataset to augment - can be List[Dict] or Dict[str, List[Dict]]
-            augmentation_config (Dict): Configuration for the augmentation pipeline
-
-        Returns:
-            Same type as input: List[Dict] or Dict[str, List[Dict]] with augmented data
-
-        Example augmentation_config:
-        {
-            "enabled": True,
-            "use_eda": True,
-            "use_back_translation": True,
-            "use_paraphrasing": False,
-            "use_synthesis": True,
-            "gemini_api_key": "your_gemini_api_key",
-            "augmentation_factor": 1.5,
-            "eda_alpha_sr": 0.1,
-            "paraphrase_model": "humarin/chatgpt_paraphraser_on_T5_base"
-        }
-        """
-        try:
-            # Check if dataset is a dict with splits or a simple list
-            if isinstance(dataset, dict):
-                # Handle split dataset - augment each split individually
-                augmented_dataset = {}
-                for split_name, split_data in dataset.items():
-                    logger.info(
-                        f"Augmenting {split_name} split with {len(split_data)} samples"
-                    )
-                    augmented_split = self._augment_split(
-                        split_data, augmentation_config
-                    )
-                    augmented_dataset[split_name] = augmented_split
-                return augmented_dataset
-            else:
-                # Handle simple list dataset
-                return self._augment_split(dataset, augmentation_config)
-
-        except Exception as e:
-            logger.error(f"Augmentation failed: {e}")
-            logger.warning("Continuing without augmentation")
-            return dataset
 
     def _augment_split(
         self, split_data: List[Dict], augmentation_config: Dict
