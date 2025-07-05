@@ -21,6 +21,11 @@ class StorageInterface(ABC):
         pass
 
     @abstractmethod
+    async def download_binary_data(self, path: str) -> bytes:
+        """Download data from storage as binary"""
+        pass
+
+    @abstractmethod
     def list_files(self, prefix: str = "") -> List[str]:
         """List files with optional prefix filter"""
         pass

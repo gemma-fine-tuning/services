@@ -54,6 +54,16 @@ class LocalStorageManager(StorageInterface):
             logger.error(f"Error loading from local storage: {str(e)}")
             raise
 
+    async def download_binary_data(self, path: str) -> bytes:
+        """Load binary data from local file system"""
+        try:
+            file_path = self.base_path / path
+            with open(file_path, "rb") as f:
+                return f.read()
+        except Exception as e:
+            logger.error(f"Error loading binary data from local storage: {str(e)}")
+            raise
+
     def list_files(self, prefix: str = "") -> List[str]:
         """List files in local storage"""
         try:

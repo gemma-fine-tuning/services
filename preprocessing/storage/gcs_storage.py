@@ -52,6 +52,15 @@ class GCSStorageManager(StorageInterface):
             logger.error(f"Error downloading from GCS: {str(e)}")
             raise
 
+    async def download_binary_data(self, path: str) -> bytes:
+        """Download binary data from GCS"""
+        try:
+            blob = self.bucket.blob(path)
+            return blob.download_as_bytes()
+        except Exception as e:
+            logger.error(f"Error downloading binary data from GCS: {str(e)}")
+            raise
+
     def list_files(self, prefix: str = "") -> List[str]:
         """List files in GCS bucket"""
         try:
