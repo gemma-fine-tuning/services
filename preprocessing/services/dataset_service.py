@@ -15,6 +15,7 @@ from schema import (
 )
 from datasets import Dataset
 import json
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +207,7 @@ class DatasetService:
                 )
 
             # Save all splits
-            dataset_path = await self.handler.upload_processed_dataset(
+            await self.handler.upload_processed_dataset(
                 processed_dataset,
                 dataset_name,
                 dataset_id,
@@ -215,20 +216,14 @@ class DatasetService:
                 dataset_source,
             )
 
-            splits = {}
-            for split_name, split_dataset in processed_dataset.items():
-                splits[split_name] = split_dataset.num_rows
-
-            sample_comparison = {
-                "original": dataset["train"][:1],
-                "processed": processed_dataset["train"][:1],
-            }
-
             return ProcessingResult(
-                processed_dataset_name=dataset_name,
-                dataset_path=dataset_path,
-                splits=splits,
-                sample_comparison=sample_comparison,
+                dataset_name=dataset_name,
+                dataset_subset=dataset_subset,
+                dataset_source=dataset_source,
+                dataset_id=dataset_id,
+                num_examples=len(processed_dataset["train"]),
+                created_at=datetime.now().isoformat(),
+                splits=list(processed_dataset.keys()),
             )
 
         except Exception as e:

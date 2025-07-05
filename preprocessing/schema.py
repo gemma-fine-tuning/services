@@ -71,13 +71,6 @@ class PreprocessingRequest(BaseModel):
     config: PreprocessingConfig
 
 
-class ProcessingResult(BaseModel):
-    processed_dataset_name: str
-    dataset_path: str
-    splits: Dict[str, int]  # split_name -> num_rows
-    sample_comparison: Dict[str, Any]  # Only one sample from train split
-
-
 class DatasetInfoSample(BaseModel):
     dataset_name: str
     dataset_subset: str
@@ -86,6 +79,10 @@ class DatasetInfoSample(BaseModel):
     num_examples: int
     created_at: str
     splits: List[str]
+
+
+class ProcessingResult(DatasetInfoSample):
+    pass
 
 
 class DatasetsInfoResponse(BaseModel):
