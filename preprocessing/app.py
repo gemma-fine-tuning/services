@@ -8,6 +8,7 @@ from schema import (
     DatasetUploadResponse,
     PreprocessingRequest,
     ProcessingResult,
+    DatasetsInfoResponse,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -101,6 +102,21 @@ async def process_dataset(request: PreprocessingRequest):
     except Exception as e:
         logger.error(f"Error processing dataset: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+
+
+@app.get("/datasets", response_model=DatasetsInfoResponse)
+async def get_datasets_info():
+    """
+    Get information about all the processed datasets.
+    """
+    try:
+        result = await dataset_service.get_datasets_info()
+        return result
+    except Exception as e:
+        logger.error(f"Error getting datasets info: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get datasets info: {str(e)}"
+        )
 
 
 if __name__ == "__main__":

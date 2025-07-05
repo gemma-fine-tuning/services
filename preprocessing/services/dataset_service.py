@@ -9,8 +9,11 @@ from schema import (
     DatasetUploadResponse,
     ProcessingResult,
     PreprocessingConfig,
+    DatasetsInfoResponse,
+    DatasetInfoSample,
 )
 from datasets import Dataset
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +232,79 @@ class DatasetService:
 
         except Exception as e:
             logger.error(f"Error processing dataset: {str(e)}")
+            raise
+
+    async def get_datasets_info(self) -> DatasetsInfoResponse:
+        """
+        Get information about all the processed datasets.
+
+        This method:
+        1. Lists all directories in the processed_datasets/ folder
+        2. For each dataset directory, reads the metadata.json file
+        3. Extracts the required information and returns it as a DatasetsInfoResponse
+
+        Returns:
+            DatasetsInfoResponse: An object containing a list of DatasetInfoSample objects
+                with information about each processed dataset
+
+        Raises:
+            Exception: If there's an error reading the datasets information
+        """
+        try:
+            all_files = self.storage.list_files(prefix="processed_datasets/")
+
+            dataset_names = set()
+
+            for file_path in all_files:
+                if file_path.startswith("processed_datasets/"):
+                    parts = file_path.split("/")
+                    if len(parts) >= 3:
+                        dataset_names.add(parts[1])
+
+            datasets_info = []
+
+            for dataset_name in dataset_names:
+                try:
+                    metadata_path = f"processed_datasets/{dataset_name}/metadata.json"
+
+                    if not self.storage.file_exists(metadata_path):
+                        logger.warning(
+                            f"Metadata file not found for dataset: {dataset_name}"
+                        )
+                        continue
+
+                    metadata_content = await self.storage.download_data(metadata_path)
+                    metadata = json.loads(metadata_content)
+
+                    total_examples = 0
+                    for split in metadata.get("splits", []):
+                        total_examples += split.get("num_rows", 0)
+
+                    dataset_info = DatasetInfoSample(
+                        dataset_name=metadata.get("dataset_name"),
+                        dataset_subset=metadata.get("dataset_subset"),
+                        dataset_source=metadata.get("dataset_source"),
+                        dataset_id=metadata.get("dataset_id"),
+                        num_examples=total_examples,
+                        created_at=metadata.get("upload_date"),
+                        splits=[
+                            split.get("split_name")
+                            for split in metadata.get("splits", [])
+                        ],
+                    )
+
+                    datasets_info.append(dataset_info)
+
+                except Exception as e:
+                    logger.error(
+                        f"Error reading metadata for dataset {dataset_name}: {str(e)}"
+                    )
+                    continue
+
+            return DatasetsInfoResponse(datasets=datasets_info)
+
+        except Exception as e:
+            logger.error(f"Error getting datasets info: {str(e)}")
             raise
 
     def _augment_split(

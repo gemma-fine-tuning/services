@@ -78,6 +78,20 @@ class ProcessingResult(BaseModel):
     sample_comparison: Dict[str, Any]  # Only one sample from train split
 
 
+class DatasetInfoSample(BaseModel):
+    dataset_name: str
+    dataset_subset: str
+    dataset_source: Literal["upload", "huggingface"]
+    dataset_id: str
+    num_examples: int
+    created_at: str
+    splits: List[str]
+
+
+class DatasetsInfoResponse(BaseModel):
+    datasets: List[DatasetInfoSample]
+
+
 class ValidationResponse(BaseModel):
     is_valid: bool
     errors: List[str]
