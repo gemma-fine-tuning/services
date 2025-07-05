@@ -103,11 +103,3 @@ class DatasetInfoFull(BaseModel):
 
 class DatasetInfoResponse(DatasetInfoFull):
     pass
-
-
-class ValidationResponse(BaseModel):
-    is_valid: bool
-    errors: List[str]
-    warnings: List[str]
-    total_samples: int
-    valid_samples: int
