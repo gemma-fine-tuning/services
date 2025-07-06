@@ -15,7 +15,7 @@ class LocalStorageManager(StorageInterface):
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
 
-    async def upload_data(
+    def upload_data(
         self, data: Union[str, List[Dict], bytes], path: str, metadata: Dict = None
     ) -> str:
         """Save data to local file system"""
@@ -44,7 +44,7 @@ class LocalStorageManager(StorageInterface):
             logger.error(f"Error saving to local storage: {str(e)}")
             raise
 
-    async def download_data(self, path: str) -> str:
+    def download_data(self, path: str) -> str:
         """Load data from local file system"""
         try:
             file_path = self.base_path / path
@@ -54,7 +54,7 @@ class LocalStorageManager(StorageInterface):
             logger.error(f"Error loading from local storage: {str(e)}")
             raise
 
-    async def download_binary_data(self, path: str) -> bytes:
+    def download_binary_data(self, path: str) -> bytes:
         """Load binary data from local file system"""
         try:
             file_path = self.base_path / path

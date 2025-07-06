@@ -17,7 +17,7 @@ class GCSStorageManager(StorageInterface):
         self.bucket_name = bucket_name
         self.bucket = self.client.bucket(bucket_name)
 
-    async def upload_data(
+    def upload_data(
         self, data: Union[str, List[Dict], bytes], path: str, metadata: Dict = None
     ) -> str:
         """Upload data to GCS"""
@@ -43,7 +43,7 @@ class GCSStorageManager(StorageInterface):
             logger.error(f"Error uploading to GCS: {str(e)}")
             raise
 
-    async def download_data(self, path: str) -> str:
+    def download_data(self, path: str) -> str:
         """Download data from GCS"""
         try:
             blob = self.bucket.blob(path)
@@ -52,7 +52,7 @@ class GCSStorageManager(StorageInterface):
             logger.error(f"Error downloading from GCS: {str(e)}")
             raise
 
-    async def download_binary_data(self, path: str) -> bytes:
+    def download_binary_data(self, path: str) -> bytes:
         """Download binary data from GCS"""
         try:
             blob = self.bucket.blob(path)

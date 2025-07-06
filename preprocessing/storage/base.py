@@ -9,19 +9,19 @@ class StorageInterface(ABC):
     """Base interface for storage operations"""
 
     @abstractmethod
-    async def upload_data(
+    def upload_data(
         self, data: Union[str, List[Dict], bytes], path: str, metadata: Dict = None
     ) -> str:
         """Upload data to storage and return the storage path"""
         pass
 
     @abstractmethod
-    async def download_data(self, path: str) -> str:
+    def download_data(self, path: str) -> str:
         """Download data from storage as text"""
         pass
 
     @abstractmethod
-    async def download_binary_data(self, path: str) -> bytes:
+    def download_binary_data(self, path: str) -> bytes:
         """Download data from storage as binary"""
         pass
 
