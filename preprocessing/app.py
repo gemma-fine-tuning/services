@@ -60,7 +60,7 @@ async def upload_dataset(file: UploadFile = File(...)):
     try:
         file_content = await file.read()
 
-        result = await dataset_service.upload_dataset(
+        result = dataset_service.upload_dataset(
             file_data=file_content,
             filename=file.filename,
             metadata={"content_type": file.content_type},
@@ -106,12 +106,12 @@ async def process_dataset(request: PreprocessingRequest):
 
 
 @app.get("/datasets", response_model=DatasetsInfoResponse)
-async def get_datasets_info():
+def get_datasets_info():
     """
     Get information about all the processed datasets.
     """
     try:
-        result = await dataset_service.get_datasets_info()
+        result = dataset_service.get_datasets_info()
         return result
     except Exception as e:
         logger.error(f"Error getting datasets info: {str(e)}")
@@ -121,12 +121,12 @@ async def get_datasets_info():
 
 
 @app.get("/datasets/{dataset_name}", response_model=DatasetInfoResponse)
-async def get_dataset_info(dataset_name: str):
+def get_dataset_info(dataset_name: str):
     """
     Get information about a dataset.
     """
     try:
-        result = await dataset_service.get_dataset_info(dataset_name)
+        result = dataset_service.get_dataset_info(dataset_name)
         return result
     except Exception as e:
         logger.error(f"Error getting dataset info: {str(e)}")

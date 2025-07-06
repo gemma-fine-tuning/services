@@ -36,7 +36,7 @@ class DatasetHandler:
     Example:
         >>> storage = StorageInterface()
         >>> handler = DatasetHandler(storage)
-        >>> response = await handler.upload_dataset(file_data, "dataset.csv")
+        >>> response = handler.upload_dataset(file_data, "dataset.csv")
     """
 
     def __init__(self, storage: StorageInterface):
@@ -81,7 +81,7 @@ class DatasetHandler:
             and filename.rsplit(".", 1)[1].lower() in self.supported_formats
         )
 
-    async def upload_dataset(
+    def upload_dataset(
         self, file_data: bytes, filename: str, metadata: Optional[Dict] = None
     ) -> DatasetUploadResponse:
         """
@@ -119,7 +119,7 @@ class DatasetHandler:
         Example:
             >>> with open("dataset.csv", "rb") as f:
             ...     file_data = f.read()
-            >>> response = await handler.upload_dataset(
+            >>> response = handler.upload_dataset(
             ...     file_data,
             ...     "dataset.csv",
             ...     metadata={"description": "My dataset"}
@@ -147,7 +147,7 @@ class DatasetHandler:
                 **(metadata or {}),
             }
 
-            storage_path = await self.storage.upload_data(
+            storage_path = self.storage.upload_data(
                 file_data, blob_name, upload_metadata
             )
 
@@ -173,7 +173,7 @@ class DatasetHandler:
             logger.error(f"Error uploading dataset: {str(e)}")
             raise
 
-    async def upload_processed_dataset(
+    def upload_processed_dataset(
         self,
         dataset: DatasetDict,
         dataset_name: str,
@@ -224,7 +224,7 @@ class DatasetHandler:
             buf = io.BytesIO()
             split_dataset.to_parquet(buf)
             blob_name = f"{base_blob_name}/{split_name}.parquet"
-            split_path = await self.storage.upload_data(buf.getvalue(), blob_name)
+            split_path = self.storage.upload_data(buf.getvalue(), blob_name)
             metadata["splits"].append(
                 {
                     "split_name": split_name,
@@ -233,7 +233,7 @@ class DatasetHandler:
                 }
             )
 
-        metadata_path = await self.storage.upload_data(
+        metadata_path = self.storage.upload_data(
             json.dumps(metadata), f"{base_blob_name}/metadata.json"
         )
 
@@ -241,7 +241,7 @@ class DatasetHandler:
 
         return dataset_path
 
-    async def does_dataset_exist(self, dataset_name: str) -> bool:
+    def does_dataset_exist(self, dataset_name: str) -> bool:
         """
         Check if a processed dataset exists in storage.
 

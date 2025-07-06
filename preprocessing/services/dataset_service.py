@@ -44,7 +44,7 @@ class DatasetService:
     Example:
         >>> storage = StorageInterface()
         >>> service = DatasetService(storage)
-        >>> response = await service.upload_dataset(file_data, "dataset.csv")
+        >>> response = service.upload_dataset(file_data, "dataset.csv")
     """
 
     def __init__(self, storage: StorageInterface):
@@ -60,7 +60,7 @@ class DatasetService:
         self.loader = DatasetLoader(storage)
         self.converter = FormatConverter()
 
-    async def upload_dataset(
+    def upload_dataset(
         self, file_data: bytes, filename: str, metadata: Optional[Dict] = None
     ) -> DatasetUploadResponse:
         """
@@ -97,13 +97,13 @@ class DatasetService:
         Example:
             >>> with open("dataset.csv", "rb") as f:
             ...     file_data = f.read()
-            >>> response = await service.upload_dataset(
+            >>> response = service.upload_dataset(
             ...     file_data,
             ...     "dataset.csv",
             ...     metadata={"description": "My dataset"}
             ... )
         """
-        return await self.handler.upload_dataset(file_data, filename, metadata)
+        return self.handler.upload_dataset(file_data, filename, metadata)
 
     async def process_dataset(
         self,
@@ -179,7 +179,7 @@ class DatasetService:
             ... )
         """
         try:
-            if await self.handler.does_dataset_exist(dataset_name):
+            if self.handler.does_dataset_exist(dataset_name):
                 raise ValueError(
                     f"Dataset {dataset_name} already exists. Please use a different name."
                 )
@@ -207,7 +207,7 @@ class DatasetService:
                 )
 
             # Save all splits
-            await self.handler.upload_processed_dataset(
+            self.handler.upload_processed_dataset(
                 processed_dataset,
                 dataset_name,
                 dataset_id,
@@ -230,7 +230,7 @@ class DatasetService:
             logger.error(f"Error processing dataset: {str(e)}")
             raise
 
-    async def get_datasets_info(self) -> DatasetsInfoResponse:
+    def get_datasets_info(self) -> DatasetsInfoResponse:
         """
         Get information about all the processed datasets.
 
@@ -269,7 +269,7 @@ class DatasetService:
                         )
                         continue
 
-                    metadata_content = await self.storage.download_data(metadata_path)
+                    metadata_content = self.storage.download_data(metadata_path)
                     metadata = json.loads(metadata_content)
 
                     total_examples = 0
@@ -303,7 +303,7 @@ class DatasetService:
             logger.error(f"Error getting datasets info: {str(e)}")
             raise
 
-    async def get_dataset_info(self, dataset_name: str) -> DatasetInfoResponse:
+    def get_dataset_info(self, dataset_name: str) -> DatasetInfoResponse:
         """
         Get information about a dataset including samples from each split.
         """
@@ -312,7 +312,7 @@ class DatasetService:
             import pyarrow.parquet as pq
 
             metadata_path = f"processed_datasets/{dataset_name}/metadata.json"
-            metadata_content = await self.storage.download_data(metadata_path)
+            metadata_content = self.storage.download_data(metadata_path)
             metadata = json.loads(metadata_content)
 
             # Get splits information with samples
@@ -325,7 +325,7 @@ class DatasetService:
                 samples = []
                 try:
                     if self.storage.file_exists(split_path):
-                        split_data = await self.storage.download_binary_data(split_path)
+                        split_data = self.storage.download_binary_data(split_path)
                         table = pq.read_table(io.BytesIO(split_data))
                         samples = table.slice(0, 5).to_pylist()
                 except Exception as e:

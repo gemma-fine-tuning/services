@@ -99,7 +99,7 @@ class DatasetLoader:
             logger.error(f"Error loading dataset: {str(e)}")
             raise
 
-    async def _load_uploaded_dataset(
+    def _load_uploaded_dataset(
         self, dataset_id: str, config: PreprocessingConfig
     ) -> DatasetDict:
         """
