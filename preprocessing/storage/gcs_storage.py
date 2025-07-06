@@ -6,8 +6,6 @@ from .base import StorageInterface
 
 logger = logging.getLogger(__name__)
 
-# TODO: GCS MODULE STILL NEEDS TESTING
-
 
 class GCSStorageManager(StorageInterface):
     """Google Cloud Storage implementation"""
