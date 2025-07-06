@@ -1,5 +1,10 @@
+import io
+import json
 import logging
-from typing import List, Dict, Optional
+import pyarrow.parquet as pq
+from datetime import datetime
+from datasets import Dataset
+from typing import Dict, List, Optional
 from storage.base import StorageInterface
 from .dataset_handler import DatasetHandler
 from .dataset_loader import DatasetLoader
@@ -13,9 +18,6 @@ from schema import (
     DatasetInfoSample,
     DatasetInfoResponse,
 )
-from datasets import Dataset
-import json
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -308,9 +310,6 @@ class DatasetService:
         Get information about a dataset including samples from each split.
         """
         try:
-            import io
-            import pyarrow.parquet as pq
-
             metadata_path = f"processed_datasets/{dataset_name}/metadata.json"
             metadata_content = self.storage.download_data(metadata_path)
             metadata = json.loads(metadata_content)
