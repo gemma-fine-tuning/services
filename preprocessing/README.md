@@ -1,65 +1,43 @@
 # Preprocessing Service
 
-A FastAPI-based preprocessing service for Gemma fine-tuning that handles dataset upload, validation, and preprocessing with support for both domain and task adaptation.
+FastAPI based preprocessing service for [Gemma fine-tuning](https://github.com/gemma-fine-tuning/). It handles uploading local datasets, preprocessing them and storing them in Google Cloud Storage / Local file system.
 
 ## Architecture
 
 This service follows a simplified 5-component architecture:
 
-1. **DatasetHandler** - Dataset upload, loading, and validation
-2. **PreprocessingEngine** - Text processing and formatting
-3. **StorageManager** - Google Cloud Storage operations
-4. **ConfigManager** - Configuration presets and management
-5. **QualityMetrics** - Data quality assessment
-
-## Migration from Flask
-
-This service replaces the original `preprocessing/app.py` Flask application with:
-
-- FastAPI for better async support and automatic API docs
-- Modular component design for easier maintenance
-- Enhanced error handling and logging
-- Built-in configuration presets for common use cases
+1. **DatasetHandler** - Uploads raw and processed datasets with the help of storage service
+2. **DatasetLoader** - Loads datasets from local file system or HuggingFace datasets into a `DatasetDict` object
+3. **FormatConverter** - Converts datasets to ChatML format
+4. **Storage Service** - Handles storage of datasets in Google Cloud Storage / Local File System
+    1. **GCSStorageManager** - Handles storage of datasets in Google Cloud Storage
+    2. **LocalStorageManager** - Handles storage of datasets in Local File System
+5. **DatasetService** - Utilizes the above components to handle dataset upload, processing and storage. This is the main entry point for the API.
 
 ## API Endpoints
 
-### Core Endpoints
-
 - `GET /health` - Health check
 - `POST /upload` - Upload dataset files
-- `POST /preprocess` - Start preprocessing job
-- `GET /dataset/{dataset_id}` - Get dataset information
-- `GET /presets` - List available configuration presets
+- `POST /process` - Start preprocessing job
+- `GET /datasets` - List all datasets
+- `GET /datasets/{dataset_name}` - Get dataset information
 
-### Supported Formats
+## Supported Formats
 
-- JSON, JSONL, CSV files
+- JSON, JSONL, CSV, Parquet and Excel files
 - HuggingFace datasets
-- Text files
-
-## Configuration Presets
-
-### Domain Adaptation
-
-- `medical` - Medical domain with specialized terminology preservation
-- `legal` - Legal domain with citation handling
-- `financial` - Financial domain with currency normalization
-
-### Task Adaptation
-
-- `question_answering` - Q&A format with context support
-- `text_classification` - Classification with label formatting
-- `code_generation` - Code generation with structure preservation
-- `summarization` - Document summarization format
 
 ## Deployment
 
 ### Local Development
 
+This application uses [`uv`](https://docs.astral.sh/uv/) for dependency management instead of `pip`, hence, the following commands use `uv` instead of `pip`. However, you can use `pip` if you prefer.
+
 ```bash
-pip install -r requirements.txt
-uvicorn app:app --reload --port 8080
+uv run uvicorn app:app
 ```
+
+Add `--reload` if you are developing and want to automatically reload the server on code changes. (Not recommended for production)
 
 ### Docker
 
@@ -79,58 +57,40 @@ gcloud run deploy preprocessing-service \
   --set-env-vars GCS_DATA_BUCKET_NAME=your-bucket
 ```
 
+> **Note**: We recommend using the `us-central1` region because GPU support is available in this region. So it'll be required for the fine-tuning service to run. Having both the services and the data bucket in the same region will help in reducing the latency.
+
 ## Environment Variables
 
-- `GCS_DATA_BUCKET_NAME` - Google Cloud Storage bucket name (default: "gemma-dataset-dev")
-- `PORT` - Service port (default: 8080)
+> Checkout the [`.env.example`](../.env.example) file for the list of environment variables.
 
 ## Features
 
-### Current Features (Migrated from Flask)
+### Current Features
 
-- ✅ Dataset upload to Google Cloud Storage
+- ✅ Dataset upload to Google Cloud Storage / Local File System
 - ✅ HuggingFace dataset loading
-- ✅ Text preprocessing and normalization
 - ✅ Conversation format conversion
 - ✅ Train/test dataset splitting
-- ✅ Multiple file format support (JSON, JSONL, CSV)
-
-### New Features
-
-- ✅ Configuration presets for domain/task adaptation
-- ✅ Modular component architecture
-- ✅ Enhanced error handling
-- ✅ API documentation (FastAPI auto-docs at `/docs`)
+- ✅ Multiple file format support (JSON, JSONL, CSV, Parquet, Excel)
+- ✅ Storage of processed datasets in Google Cloud Storage / Local File System
+- ✅ Getting processed datasets' information
+- ✅ Data augmentation capabilities
 
 ### Planned Features (Placeholders)
 
-- 🔄 Advanced text cleaning pipeline
-- 🔄 Data augmentation capabilities
-- 🔄 Quality metrics and validation
-- 🔄 Schema auto-detection
-- 🔄 Preview functionality
+- 🔄 PDF file processing
+- 🔄 Processing datasets for different fine-tuning tasks
 
 ## API Documentation
 
 Once running, visit `http://localhost:8080/docs` for interactive API documentation.
 
-## Migration Notes
-
-This service maintains backward compatibility with the original Flask API while adding new capabilities. Key improvements:
-
-1. **Better Structure** - Separated concerns into focused components
-2. **Type Safety** - Pydantic models for request/response validation
-3. **Async Support** - Better performance for I/O operations
-4. **Configuration** - Built-in presets for common use cases
-5. **Extensibility** - Easy to add new preprocessing features
-
 ## Development
 
 To add new preprocessing features:
 
-1. Add methods to `PreprocessingEngine`
-2. Update configuration presets in `config.py`
-3. Add new API endpoints in `app.py`
-4. Update Pydantic models in `models.py`
+1. Add methods to [`DatasetService`](./services/dataset_service.py)
+2. Add new API endpoints in [`app.py`](./app.py)
+3. Update Pydantic models in [`schema.py`](./schema.py)
 
 The modular design makes it easy to extend functionality while maintaining clean separation of concerns.

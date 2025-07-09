@@ -1,33 +1,119 @@
-import random
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, TypedDict
 from abc import ABC, abstractmethod
 from .eda import eda
+import random
 
 logger = logging.getLogger(__name__)
 
 
 class BaseAugmentor(ABC):
-    """Base class for all text augmentation techniques"""
+    """
+    Base class for all text augmentation techniques
+    Whenever the augment metho is called, augmentation is applied 100% of the time.
+    We do not use probabilities here because the upstream usage should ensures that
+    the final desired dataset size is achieved by sampling random data from the dataset
+    and applying a few variations of augmentation to it and selecting the proper variation.
+    """
 
-    def __init__(self, probability: float = 0.5):
-        self.probability = probability
+    def __init__(self):
+        pass
 
     @abstractmethod
     def augment(self, text: str) -> str:
         """Apply augmentation to text"""
         pass
 
-    def should_augment(self) -> bool:
-        """Determine if augmentation should be applied based on probability"""
-        return random.random() < self.probability
+
+class EDASettings(TypedDict, total=False):
+    eda_alpha_sr: float
+    eda_alpha_ri: float
+    eda_alpha_rs: float
+    eda_p_rd: float
+    num_aug: int
+
+
+class BackTranslationSettings(TypedDict, total=False):
+    intermediate_lang: str
+
+
+class ParaphrasingSettings(TypedDict, total=False):
+    paraphrase_model: str
+
+
+class SynthesisSettings(TypedDict, total=False):
+    gemini_api_key: str
+    gemini_model: str
+    synthesis_ratio: float
+    system_message: str
+    max_batch_size: int
+    custom_prompt: str
+
+
+class EDAugmentor(BaseAugmentor):
+    """
+    Easy Data Augmentation using the original EDA implementation.
+    This is the fastest and most lightweight augmentation technique.
+
+    Source: https://arxiv.org/pdf/1901.11196
+    """
+
+    def __init__(
+        self,
+        alpha_sr=0.1,
+        alpha_ri=0.1,
+        alpha_rs=0.1,
+        p_rd=0.1,
+        num_aug=1,
+    ):
+        super().__init__()
+        self.alpha_sr = alpha_sr  # synonym replacement
+        self.alpha_ri = alpha_ri  # random insertion
+        self.alpha_rs = alpha_rs  # random swap
+        self.p_rd = p_rd  # random deletion
+        self.num_aug = num_aug  # number of augmented sentences per original
+
+    def augment(self, text: str) -> str:
+        """Apply EDA augmentation"""
+        if not text.strip():
+            return text
+
+        try:
+            # Use the original EDA function
+            augmented_sentences = eda(
+                text,
+                alpha_sr=self.alpha_sr,
+                alpha_ri=self.alpha_ri,
+                alpha_rs=self.alpha_rs,
+                p_rd=self.p_rd,
+                num_aug=self.num_aug,
+            )
+
+            # Return the first augmented sentence (excluding original which is last)
+            if len(augmented_sentences) > 1:
+                return augmented_sentences[0]
+            return text
+
+        except Exception as e:
+            logger.warning(f"EDA augmentation failed: {e}")
+            return text
 
 
 class BackTranslationAugmentor(BaseAugmentor):
-    """Back translation using Helsinki-NLP models via transformers"""
+    """
+    Back translation using Helsinki-NLP models via transformers
+    Source: https://huggingface.co/docs/transformers/en/model_doc/marian#transformers.MarianMTModel
 
-    def __init__(self, probability: float = 0.3, intermediate_lang: str = "fr"):
-        super().__init__(probability)
+    The model class is quite lightweight (just 300MB each model) and supports 1000+ language pairs.
+    This woul require at least 600MB of disk space for the two models. The models are loaded lazily only if use.
+
+    The backtranslation technique is proposed in https://arxiv.org/pdf/2106.04681
+
+    NOTE: Back translation does not guarantee that the output will be different from the input!
+    """
+
+    def __init__(self, intermediate_lang: str = "fr"):
+        super().__init__()
         self.intermediate_lang = intermediate_lang
         self._forward_model = None
         self._backward_model = None
@@ -74,11 +160,16 @@ class BackTranslationAugmentor(BaseAugmentor):
 
     def augment(self, text: str) -> str:
         """Apply back translation augmentation"""
-        if not self.should_augment() or not text.strip():
+        if not text.strip():
             return text
 
         try:
             self._load_models()
+
+            if self._forward_model is None or self._backward_model is None:
+                raise ValueError("Back translation models not loaded")
+            if self._forward_tokenizer is None or self._backward_tokenizer is None:
+                raise ValueError("Back translation tokenizers not loaded")
 
             # Translate to intermediate language
             forward_inputs = self._forward_tokenizer(
@@ -106,7 +197,13 @@ class BackTranslationAugmentor(BaseAugmentor):
                 backward_outputs[0], skip_special_tokens=True
             )
 
-            return back_translated if back_translated.strip() else text
+            if back_translated.strip():
+                return back_translated.strip()
+            else:
+                logger.warning(
+                    "Back translation returned empty result, returning original text."
+                )
+                return text.strip()
 
         except Exception as e:
             logger.warning(f"Back translation failed: {e}")
@@ -114,12 +211,14 @@ class BackTranslationAugmentor(BaseAugmentor):
 
 
 class ParaphraseAugmentor(BaseAugmentor):
-    """Paraphrasing using T5 or similar models"""
+    """
+    Paraphrasing using T5 models specialized for paraphrasing tasks.
+    Source: https://huggingface.co/humarin/chatgpt_paraphraser_on_T5_base
+    This model requires about 1GB of disk space and is loaded lazily.
+    """
 
-    def __init__(
-        self, probability: float = 0.4, model_name: str = "Vamsi/T5_Paraphrase_Paws"
-    ):
-        super().__init__(probability)
+    def __init__(self, model_name: str = "humarin/chatgpt_paraphraser_on_T5_base"):
+        super().__init__()
         self.model_name = model_name
         self._model = None
         self._tokenizer = None
@@ -128,13 +227,12 @@ class ParaphraseAugmentor(BaseAugmentor):
         """Lazy load paraphrasing model"""
         if self._model is None:
             try:
-                from transformers import T5ForConditionalGeneration, T5Tokenizer
+                from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
-                self._tokenizer = T5Tokenizer.from_pretrained(self.model_name)
-                self._model = T5ForConditionalGeneration.from_pretrained(
-                    self.model_name
-                )
-
+                # Load tokenizer and model
+                # NOTE: If we do have GPU for this service send them .to(device) but now I assume we do preprocessing on CPU
+                self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+                self._model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
                 logger.info(f"Loaded paraphrasing model: {self.model_name}")
 
             except ImportError:
@@ -146,377 +244,207 @@ class ParaphraseAugmentor(BaseAugmentor):
                 logger.error(f"Failed to load paraphrasing model: {e}")
                 raise
 
+    def _paraphrase(
+        self,
+        question: str,
+        num_beams=5,
+        num_beam_groups=5,
+        num_return_sequences=5,
+        repetition_penalty=10.0,
+        diversity_penalty=3.0,
+        no_repeat_ngram_size=2,
+        temperature=0.7,
+        max_length=128,
+    ) -> List[str]:
+        """
+        This method references the example usage from https://huggingface.co/humarin/chatgpt_paraphraser_on_T5_base
+        Try not to modify the parameters since they are providers by the original author and is most likely to work best.
+        """
+        if self._model is None or self._tokenizer is None:
+            raise ValueError("Paraphrasing model not loaded")
+
+        input_ids = self._tokenizer(
+            f"paraphrase: {question}",
+            return_tensors="pt",
+            padding="longest",
+            max_length=max_length,
+            truncation=True,
+        ).input_ids
+
+        outputs = self._model.generate(
+            input_ids,
+            temperature=temperature,
+            repetition_penalty=repetition_penalty,
+            num_return_sequences=num_return_sequences,
+            no_repeat_ngram_size=no_repeat_ngram_size,
+            num_beams=num_beams,
+            num_beam_groups=num_beam_groups,
+            max_length=max_length,
+            diversity_penalty=diversity_penalty,
+        )
+
+        res = self._tokenizer.batch_decode(outputs, skip_special_tokens=True)
+
+        return res
+
     def augment(self, text: str) -> str:
         """Apply paraphrasing augmentation"""
-        if not self.should_augment() or not text.strip():
+        if not text.strip():
             return text
 
         try:
             self._load_model()
 
-            # Prepare input for T5 (add task prefix)
-            input_text = f"paraphrase: {text}"
+            # Generate paraphrases -- we only need one paraphrase
+            paraphrases = self._paraphrase(text, num_return_sequences=1)
 
-            # Tokenize and generate
-            inputs = self._tokenizer.encode(
-                input_text, return_tensors="pt", max_length=512, truncation=True
-            )
-            outputs = self._model.generate(
-                inputs,
-                max_length=512,
-                num_beams=5,
-                num_return_sequences=1,
-                temperature=0.7,
-                early_stopping=True,
-            )
-
-            paraphrased = self._tokenizer.decode(outputs[0], skip_special_tokens=True)
-            return paraphrased if paraphrased.strip() else text
+            # Return the first paraphrase if available, otherwise original text
+            if paraphrases:
+                return paraphrases[0].strip()
+            else:
+                logger.warning("No paraphrase generated, returning original text.")
+                return text.strip()
 
         except Exception as e:
             logger.warning(f"Paraphrasing failed: {e}")
             return text
 
 
-class EDAugmentor(BaseAugmentor):
-    """Easy Data Augmentation using the original EDA implementation"""
+class TextAugmentationPipeline:
+    """
+    This pipeline uses user settings to run the pipeline. It does not handle creating these config or augmentors.
+    This must be instantiated by the AugmentationManager. Think of this as an intern for that manager that never gets paid.
+    """
 
     def __init__(
         self,
-        probability: float = 0.5,
-        alpha_sr=0.1,
-        alpha_ri=0.1,
-        alpha_rs=0.1,
-        p_rd=0.1,
-        num_aug=1,
+        augmentors: Dict[str, Any],
+        synthesizer=None,
+        synthesis_settings: Optional[SynthesisSettings] = None,
     ):
-        super().__init__(probability)
-        self.alpha_sr = alpha_sr  # synonym replacement
-        self.alpha_ri = alpha_ri  # random insertion
-        self.alpha_rs = alpha_rs  # random swap
-        self.p_rd = p_rd  # random deletion
-        self.num_aug = num_aug  # number of augmented sentences per original
-
-        # Try to download WordNet if not available
-        try:
-            import nltk
-            from nltk.corpus import wordnet
-
-            # Test if wordnet is available
-            wordnet.synsets("test")
-        except:
-            try:
-                import nltk
-
-                nltk.download("wordnet", quiet=True)
-                logger.info("Downloaded NLTK WordNet data")
-            except Exception as e:
-                logger.warning(
-                    f"Could not download WordNet: {e}. EDA will use basic augmentation only."
-                )
-
-    def augment(self, text: str) -> str:
-        """Apply EDA augmentation"""
-        if not self.should_augment() or not text.strip():
-            return text
-
-        try:
-            # Use the original EDA function
-            augmented_sentences = eda(
-                text,
-                alpha_sr=self.alpha_sr,
-                alpha_ri=self.alpha_ri,
-                alpha_rs=self.alpha_rs,
-                p_rd=self.p_rd,
-                num_aug=self.num_aug,
-            )
-
-            # Return the first augmented sentence (excluding original which is last)
-            if len(augmented_sentences) > 1:
-                return augmented_sentences[0]
-            return text
-
-        except Exception as e:
-            logger.warning(f"EDA augmentation failed: {e}")
-            return text
-
-
-class TextAugmentationPipeline:
-    """Comprehensive augmentation pipeline with Back Translation, Paraphrasing, EDA, and Conversational"""
-
-    def __init__(self, config: Dict[str, Any] = None):
-        self.config = config or {}
-
-        # Initialize all augmentors based on config
-        self.augmentors = {}
-
-        # Back translation
-        if self.config.get("enable_back_translation", True):
-            self.augmentors["back_translation"] = BackTranslationAugmentor(
-                probability=self.config.get("back_translation_probability", 0.2),
-                intermediate_lang=self.config.get("intermediate_lang", "fr"),
-            )
-
-        # Paraphrasing
-        if self.config.get("enable_paraphrasing", True):
-            self.augmentors["paraphrasing"] = ParaphraseAugmentor(
-                probability=self.config.get("paraphrasing_probability", 0.3),
-                model_name=self.config.get(
-                    "paraphrase_model", "Vamsi/T5_Paraphrase_Paws"
-                ),
-            )
-
-        # EDA
-        if self.config.get("enable_eda", True):
-            self.augmentors["eda"] = EDAugmentor(
-                probability=self.config.get("eda_probability", 0.4),
-                alpha_sr=self.config.get("eda_alpha_sr", 0.1),
-                alpha_ri=self.config.get("eda_alpha_ri", 0.1),
-                alpha_rs=self.config.get("eda_alpha_rs", 0.1),
-                p_rd=self.config.get("eda_p_rd", 0.1),
-                num_aug=1,
-            )
-
-        # Control which augmentors to use
-        self.enabled_augmentors = self.config.get(
-            "enabled_augmentors", list(self.augmentors.keys())
-        )
-
-        logger.info(
-            f"Initialized comprehensive augmentation pipeline with: {self.enabled_augmentors}"
-        )
-
-    def augment_text(self, text: str, methods: List[str] = None) -> List[str]:
-        """Apply augmentation and return multiple variations"""
-        if not text.strip():
-            return [text]
-
-        methods = methods or self.enabled_augmentors
-        variations = [text]  # Include original
-
-        for method in methods:
-            if method in self.augmentors:
-                try:
-                    augmented = self.augmentors[method].augment(text)
-                    if augmented != text and augmented.strip():
-                        variations.append(augmented)
-                except Exception as e:
-                    logger.warning(f"Augmentation method {method} failed: {e}")
-                    continue
-
-        return variations
-
-    def augment_conversation_sample(
-        self, sample: Dict[str, Any], num_variations: int = 2
-    ) -> List[Dict[str, Any]]:
-        """Augment a conversation sample and return multiple variations"""
-        if "messages" not in sample:
-            return [sample]
-
-        variations = [sample]  # Include original
-
-        for _ in range(num_variations):
-            try:
-                augmented_sample = sample.copy()
-                augmented_messages = []
-
-                for message in sample["messages"]:
-                    role = message.get("role", "")
-                    content = message.get("content", "")
-
-                    if role == "user":
-                        # Augment user questions
-                        augmented_content = (
-                            self.conversation_augmentor.vary_question_style(content)
-                        )
-
-                        # Apply text augmentation with lower probability for questions
-                        text_variations = self.augment_text(augmented_content)
-                        if len(text_variations) > 1 and random.random() < 0.3:
-                            augmented_content = random.choice(text_variations[1:])
-
-                    elif role == "assistant":
-                        # Apply text augmentation to assistant responses
-                        text_variations = self.augment_text(content)
-                        if len(text_variations) > 1:
-                            augmented_content = random.choice(text_variations[1:])
-                        else:
-                            augmented_content = content
-
-                        # Add conversational elements
-                        augmented_content = (
-                            self.conversation_augmentor.augment_response(
-                                augmented_content
-                            )
-                        )
-
-                    else:
-                        # Keep system messages unchanged
-                        augmented_content = content
-
-                    augmented_messages.append(
-                        {"role": role, "content": augmented_content}
-                    )
-
-                augmented_sample["messages"] = augmented_messages
-                variations.append(augmented_sample)
-
-            except Exception as e:
-                logger.warning(f"Failed to create variation: {e}")
-                continue
-
-        return variations
+        self.augmentors = augmentors
+        self.synthesizer = synthesizer
+        self.synthesis_settings = synthesis_settings or {}
 
     def augment_dataset(
-        self, dataset: List[Dict[str, Any]], augmentation_factor: float = 1.5
+        self, dataset: List[Dict[str, Any]], augmentation_factor: float
     ) -> List[Dict[str, Any]]:
         """Augment entire dataset"""
-        if augmentation_factor <= 1.0:
+        if not dataset:
+            logger.warning("Empty dataset provided to TextAugmentationPipeline")
             return dataset
 
-        augmented_dataset = list(dataset)  # Include original samples
+        if augmentation_factor <= 1.0:
+            logger.info(
+                f"Augmentation factor {augmentation_factor} <= 1.0, returning original dataset"
+            )
+            return dataset
 
-        # Calculate how many additional samples to generate
-        target_size = int(len(dataset) * augmentation_factor)
-        additional_needed = target_size - len(dataset)
+        original_size = len(dataset)
+        augmented_dataset = list(dataset)
+        target_size = int(original_size * augmentation_factor)
+        additional_needed = target_size - original_size
 
         if additional_needed <= 0:
+            logger.warning(
+                f"No additional samples needed (target: {target_size}, original: {original_size})"
+            )
             return dataset
 
-        # Randomly select samples to augment
-        samples_to_augment = random.choices(dataset, k=additional_needed)
+        # Use synthesis if available
+        if self.synthesizer and self.synthesizer.is_available():
+            synthesis_ratio = self.synthesis_settings.get("synthesis_ratio", 0.5)
+            synthesis_count = int(additional_needed * synthesis_ratio)
+            augmentation_count = additional_needed - synthesis_count
 
-        for sample in samples_to_augment:
-            try:
-                variations = self.augment_conversation_sample(sample, num_variations=1)
-                if len(variations) > 1:
-                    augmented_dataset.append(variations[1])  # Add the augmented version
-            except Exception as e:
-                logger.warning(f"Failed to augment sample: {e}")
-                continue
+            if synthesis_count > 0:
+                try:
+                    system_message = self.synthesis_settings.get("system_message", "")
+                    max_batch_size = self.synthesis_settings.get("max_batch_size", 10)
+                    custom_prompt = self.synthesis_settings.get("custom_prompt", "")
 
-        logger.info(
-            f"Augmented dataset from {len(dataset)} to {len(augmented_dataset)} samples"
-        )
+                    synthetic_samples = self.synthesizer.synthesize_conversations(
+                        dataset,
+                        num_samples=synthesis_count,
+                        system_message=system_message,
+                        max_batch_size=max_batch_size,
+                        user_custom_prompt=custom_prompt,
+                    )
+                    augmented_dataset.extend(synthetic_samples)
+                    logger.info(f"Generated {len(synthetic_samples)} synthetic samples")
+                except Exception as e:
+                    logger.error(f"Synthesis failed: {e}, falling back to augmentation")
+                    augmentation_count = additional_needed
+
+            additional_needed = augmentation_count
+
+        # Use traditional augmentation for remaining samples
+        if additional_needed > 0 and self.augmentors:
+            samples_to_augment = random.choices(dataset, k=additional_needed)
+
+            for sample in samples_to_augment:
+                try:
+                    augmented_sample = self._augment_conversation(sample)
+                    augmented_dataset.append(augmented_sample)
+                except Exception as e:
+                    logger.warning(f"Failed to augment sample: {e}")
+                    augmented_dataset.append(sample)  # Use original as fallback
+
+        final_size = len(augmented_dataset)
+        logger.info(f"Dataset expanded from {original_size} to {final_size} samples")
+
+        # Validate final result
+        if final_size == 0:
+            logger.error(
+                "Augmentation resulted in 0 samples, returning original dataset"
+            )
+            return dataset
+
+        if final_size < original_size:
+            logger.warning(
+                f"Augmentation reduced dataset size from {original_size} to {final_size}, returning original dataset"
+            )
+            return dataset
+
         return augmented_dataset
 
-    def get_stats(self) -> Dict[str, Any]:
-        """Get augmentation statistics"""
-        return {
-            "enabled_augmentors": self.enabled_augmentors,
-            "available_methods": list(self.augmentors.keys()),
-            "config": self.config,
-            "methods": {
-                "back_translation": "Helsinki-NLP translation models",
-                "paraphrasing": "T5-based paraphrasing",
-                "eda": "Easy Data Augmentation (synonym, insertion, swap, deletion)",
-                "conversational": "Natural conversation variations",
-            },
-        }
+    def _augment_conversation(self, sample: Dict[str, Any]) -> Dict[str, Any]:
+        """Augment a single conversation sample"""
+        if "messages" not in sample:
+            return sample
 
+        augmented_sample = sample.copy()
+        augmented_messages = []
 
-# Factory functions for easy instantiation
-def create_augmentation_pipeline(
-    lightweight: bool = False, **kwargs
-) -> TextAugmentationPipeline:
-    """Create augmentation pipeline with different complexity levels"""
+        for message in sample["messages"]:
+            role = message.get("role", "")
+            content = message.get("content", "")
 
-    if lightweight:
-        # Lightweight config - only EDA and conversational augmentation
-        config = {
-            "enable_back_translation": False,
-            "enable_paraphrasing": False,
-            "enable_eda": True,
-            "eda_probability": kwargs.get("eda_probability", 0.5),
-            "eda_alpha_sr": kwargs.get("eda_alpha_sr", 0.1),
-            "eda_alpha_ri": kwargs.get("eda_alpha_ri", 0.1),
-            "eda_alpha_rs": kwargs.get("eda_alpha_rs", 0.1),
-            "eda_p_rd": kwargs.get("eda_p_rd", 0.1),
-            **kwargs,
-        }
-    else:
-        # Full config with all augmentation methods
-        config = {
-            "enable_back_translation": kwargs.get("enable_back_translation", True),
-            "enable_paraphrasing": kwargs.get("enable_paraphrasing", True),
-            "enable_eda": kwargs.get("enable_eda", True),
-            "back_translation_probability": kwargs.get(
-                "back_translation_probability", 0.2
-            ),
-            "paraphrasing_probability": kwargs.get("paraphrasing_probability", 0.3),
-            "eda_probability": kwargs.get("eda_probability", 0.4),
-            "intermediate_lang": kwargs.get("intermediate_lang", "fr"),
-            "eda_alpha_sr": kwargs.get("eda_alpha_sr", 0.1),
-            "eda_alpha_ri": kwargs.get("eda_alpha_ri", 0.1),
-            "eda_alpha_rs": kwargs.get("eda_alpha_rs", 0.1),
-            "eda_p_rd": kwargs.get("eda_p_rd", 0.1),
-            **kwargs,
-        }
+            if role in ["user", "assistant"]:
+                augmented_content = self._augment_text(content)
+            else:
+                augmented_content = content
 
-    return TextAugmentationPipeline(config)
+            augmented_messages.append({"role": role, "content": augmented_content})
 
+        augmented_sample["messages"] = augmented_messages
+        return augmented_sample
 
-def create_eda_only_pipeline(**kwargs) -> TextAugmentationPipeline:
-    """Create pipeline with only EDA augmentation"""
-    config = {
-        "enable_back_translation": False,
-        "enable_paraphrasing": False,
-        "enable_eda": True,
-        "eda_probability": kwargs.get("eda_probability", 0.8),
-        "eda_alpha_sr": kwargs.get("eda_alpha_sr", 0.1),
-        "eda_alpha_ri": kwargs.get("eda_alpha_ri", 0.1),
-        "eda_alpha_rs": kwargs.get("eda_alpha_rs", 0.1),
-        "eda_p_rd": kwargs.get("eda_p_rd", 0.1),
-        **kwargs,
-    }
-    return TextAugmentationPipeline(config)
+    def _augment_text(self, text: str) -> str:
+        """Augment text using available methods"""
+        if not text.strip() or not self.augmentors:
+            return text
 
+        available_methods = list(self.augmentors.keys())
+        random.shuffle(available_methods)
 
-# Example usage
-if __name__ == "__main__":
-    # Test all three methods
-    text = "This is a simple example sentence for testing comprehensive augmentation."
+        for method in available_methods:
+            try:
+                augmented = self.augmentors[method].augment(text)
+                if augmented != text and augmented.strip():
+                    return augmented
+            except Exception as e:
+                logger.warning(f"Augmentation method {method} failed: {e}")
+                continue
 
-    print("Original:", text)
-    print()
-
-    # Test lightweight pipeline (EDA only)
-    print("1. Testing EDA-only pipeline...")
-    eda_pipeline = create_eda_only_pipeline()
-    eda_variations = eda_pipeline.augment_text(text)
-
-    for i, variation in enumerate(eda_variations):
-        print(f"EDA variation {i}: {variation}")
-
-    print()
-
-    # Test conversation sample with all methods
-    print("2. Testing full pipeline with conversation...")
-    full_pipeline = create_augmentation_pipeline(lightweight=False)
-
-    conversation_sample = {
-        "messages": [
-            {
-                "role": "user",
-                "content": "What is machine learning and how does it work?",
-            },
-            {
-                "role": "assistant",
-                "content": "Machine learning is a method of data analysis that automates analytical model building using algorithms.",
-            },
-        ]
-    }
-
-    print("Original conversation:")
-    for msg in conversation_sample["messages"]:
-        print(f"  {msg['role']}: {msg['content']}")
-
-    print("\nAugmented conversation (full pipeline):")
-    variations = full_pipeline.augment_conversation_sample(
-        conversation_sample, num_variations=1
-    )
-    if len(variations) > 1:
-        for msg in variations[1]["messages"]:
-            print(f"  {msg['role']}: {msg['content']}")
-
-    print(f"\nPipeline stats: {full_pipeline.get_stats()}")
+        return text

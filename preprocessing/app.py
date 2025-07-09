@@ -1,103 +1,138 @@
 import os
 import logging
 from fastapi import FastAPI, File, UploadFile, HTTPException
-from dataset_handler import DatasetHandler
-from data_preprocessor import DataPreprocessor
-from storage_manager import StorageManager
-from config import ConfigManager
+from fastapi.middleware.cors import CORSMiddleware
+from storage import GCSStorageManager, LocalStorageManager
+from services.dataset_service import DatasetService
 from schema import (
     DatasetUploadResponse,
     PreprocessingRequest,
     ProcessingResult,
+    DatasetsInfoResponse,
     DatasetInfoResponse,
 )
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
-app = FastAPI(title="Gemma Preprocessing Service", version="1.0.0")
-
-# Initialize components
-storage_manager = StorageManager(
-    bucket_name=os.getenv("GCS_DATA_BUCKET_NAME", "gemma-dataset-dev")
+app = FastAPI(
+    title="Gemma Dataset Preprocessing Service",
+    version="2.0.0",
+    description="A modular service for preprocessing datasets into ChatML format",
 )
-dataset_handler = DatasetHandler(storage_manager)
-preprocessing_engine = DataPreprocessor(storage_manager)
-config_manager = ConfigManager()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+storage_type = os.getenv("STORAGE_TYPE", "local")  # "gcs" or "local"
+
+if storage_type == "gcs":
+    bucket_name = os.getenv("GCS_DATA_BUCKET_NAME", "gemma-dataset-dev")
+    storage_manager = GCSStorageManager(bucket_name)
+    logger.info(f"Using GCS storage with bucket: {bucket_name}")
+else:
+    data_path = os.getenv("LOCAL_DATA_PATH", "./data")
+    storage_manager = LocalStorageManager(data_path)
+    logger.info(f"Using local storage at: {data_path}")
+
+dataset_service = DatasetService(storage_manager)
 
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {"status": "healthy", "service": "preprocessing"}
+    return {
+        "status": "healthy",
+        "service": "preprocessing",
+        "version": "2.0.0",
+        "storage_type": storage_type,
+    }
 
 
 @app.post("/upload", response_model=DatasetUploadResponse)
 async def upload_dataset(file: UploadFile = File(...)):
-    """
-    Upload a dataset file to cloud storage
-    """
+    """Upload a dataset file to storage"""
     try:
-        # Read file content
         file_content = await file.read()
 
-        # Upload using dataset handler
-        result = await dataset_handler.upload_dataset(
-            file_data=file_content, filename=file.filename, metadata={}
+        result = dataset_service.upload_dataset(
+            file_data=file_content,
+            filename=file.filename or "unknown",
+            metadata={"content_type": file.content_type},
         )
 
         return result
 
     except Exception as e:
         logger.error(f"Error uploading dataset: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 
-@app.post("/preprocess", response_model=ProcessingResult)
-async def start_preprocessing(request: PreprocessingRequest):
-    """
-    Start preprocessing a dataset
+@app.post("/process", response_model=ProcessingResult)
+def process_dataset(request: PreprocessingRequest):
+    """Process a dataset into ChatML format
+
+    The processing converts the dataset to ChatML format using the provided configuration.
+    The configuration can include field mappings that specify either direct column mappings or template strings
+    with column references.
+
+    Example field mappings:
+    ```python
+    {
+        "system_field": {"type": "template", "value": "You are a helpful assistant."},
+        "user_field": {"type": "column", "value": "question"},
+        "assistant_field": {"type": "template", "value": "Answer: {answer}"}
+    }
+    ```
     """
     try:
-        # Load dataset
-        dataset = await dataset_handler.load_dataset(
+        result = dataset_service.process_dataset(
+            dataset_name=request.dataset_name,
             dataset_source=request.dataset_source,
             dataset_id=request.dataset_id,
-            sample_size=request.sample_size,
+            dataset_subset=request.dataset_subset,
+            config=request.config,
         )
-
-        # Process dataset
-        result = await preprocessing_engine.process_dataset(
-            dataset=dataset, config=request.options
-        )
-
         return result
 
     except Exception as e:
-        logger.error(f"Error preprocessing dataset: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        logger.error(f"Error processing dataset: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
 
-@app.get("/dataset/{dataset_id}", response_model=DatasetInfoResponse)
-async def get_dataset_info(dataset_id: str):
+@app.get("/datasets", response_model=DatasetsInfoResponse)
+def get_datasets_info():
     """
-    Get information about a processed dataset
+    Get information about all the processed datasets.
     """
     try:
-        result = await dataset_handler.get_dataset_info(dataset_id)
+        result = dataset_service.get_datasets_info()
         return result
+    except Exception as e:
+        logger.error(f"Error getting datasets info: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get datasets info: {str(e)}"
+        )
 
+
+@app.get("/datasets/{dataset_name}", response_model=DatasetInfoResponse)
+def get_dataset_info(dataset_name: str):
+    """
+    Get information about a dataset.
+    """
+    try:
+        result = dataset_service.get_dataset_info(dataset_name)
+        return result
     except Exception as e:
         logger.error(f"Error getting dataset info: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@app.get("/presets")
-async def list_presets():
-    """List available preprocessing presets"""
-    return config_manager.get_available_presets()
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get dataset info: {str(e)}"
+        )
 
 
 if __name__ == "__main__":
