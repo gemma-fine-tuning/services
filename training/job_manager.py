@@ -26,6 +26,7 @@ class JobMetadata:
     updated_at: datetime
     processed_dataset_id: str
     base_model_id: str
+    job_name: str
     adapter_path: Optional[str] = None
     wandb_url: Optional[str] = None
     error: Optional[str] = None
@@ -69,6 +70,7 @@ class JobStateManager:
                 return None
             return JobMetadata(
                 job_id=data["job_id"],
+                job_name=data["job_name"],
                 status=JobStatus(data["status"]),
                 created_at=data["created_at"],
                 updated_at=data["updated_at"],
@@ -99,6 +101,7 @@ class JobStateManager:
 
         return {
             "job_id": job.job_id,
+            "job_name": job.job_name,
             "status": job.status.value,
             "created_at": job.created_at.isoformat(),
             "updated_at": job.updated_at.isoformat(),
@@ -123,6 +126,7 @@ class JobStateManager:
                 # Create with minimal info
                 job_metadata = JobMetadata(
                     job_id=job_id,
+                    job_name="unnamed job",
                     status=JobStatus.QUEUED,
                     created_at=datetime.now(timezone.utc),
                     updated_at=datetime.now(timezone.utc),
@@ -132,6 +136,7 @@ class JobStateManager:
             doc_ref.set(
                 {
                     "job_id": job_metadata.job_id,
+                    "job_name": job_metadata.job_name,
                     "status": job_metadata.status.value,
                     "created_at": job_metadata.created_at,
                     "updated_at": job_metadata.updated_at,
@@ -143,3 +148,24 @@ class JobStateManager:
                     "progress_info": job_metadata.progress_info,
                 }
             )
+
+    def list_jobs(self) -> list:
+        """
+        List all jobs with job_id and job_name.
+        """
+        jobs = []
+        try:
+            docs = self.collection.stream()
+            for doc in docs:
+                data = doc.to_dict()
+                jobs.append(
+                    {
+                        "job_id": data.get("job_id"),
+                        "job_name": data.get("job_name"),
+                        "job_status": data.get("status"),
+                    }
+                )
+            return jobs
+        except Exception as e:
+            self.logger.error(f"Failed to list jobs: {e}")
+            raise

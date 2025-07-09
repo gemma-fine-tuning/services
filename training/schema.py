@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Literal, Optional
+from typing import Literal, Optional, List
 
 
 class TrainingConfig(BaseModel):
@@ -30,6 +30,7 @@ class WandbConfig(BaseModel):
 
 
 class TrainRequest(BaseModel):
+    job_name: str
     # This struct is shared between the API and the backend service
     processed_dataset_id: str
     # NOTE: This is marked optional for dev but in deployment it should be required
@@ -48,8 +49,22 @@ class JobSubmitResponse(BaseModel):
 
 
 class JobStatusResponse(BaseModel):
+    job_name: str
     status: Literal["queued", "preparing", "training", "completed", "failed"]
     wandb_url: Optional[str] = None
     adapter_path: Optional[str] = None
     base_model_id: Optional[str] = None
     error: Optional[str] = None
+
+
+class JobListEntry(BaseModel):
+    job_id: str
+    job_name: str = "unnamed job"
+    # "unknown" is a fallback for jobs that don't have a status but are listed
+    job_status: Literal[
+        "queued", "preparing", "training", "completed", "failed", "unknown"
+    ] = "unknown"
+
+
+class JobListResponse(BaseModel):
+    jobs: List[JobListEntry]

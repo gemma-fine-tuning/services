@@ -3,12 +3,18 @@ import logging
 from fastapi import FastAPI, HTTPException
 from google.cloud import run_v2
 from google.cloud import storage
-from schema import TrainRequest, JobSubmitResponse, JobStatusResponse
-from job_manager import JobStateManager, JobMetadata, JobStatus
+from schema import (
+    TrainRequest,
+    JobSubmitResponse,
+    JobStatusResponse,
+    JobListResponse,
+    JobListEntry,
+)
 import json
 import uvicorn
 import hashlib
 from datetime import datetime, timezone
+from job_manager import JobStateManager, JobMetadata, JobStatus
 
 app = FastAPI(
     title="Gemma Training Service",
@@ -52,6 +58,19 @@ def make_job_id(processed_dataset_id, base_model_id, request):
     return f"{base}_{short_hash}"
 
 
+@app.get("/jobs", response_model=JobListResponse)
+async def list_jobs():
+    """List all jobs with job_id and job_name."""
+    try:
+        jobs = job_manager.list_jobs()
+        # Only return jobs that have a job_id
+        job_entries = [JobListEntry(**job) for job in jobs if job.get("job_id")]
+        return JobListResponse(jobs=job_entries)
+    except Exception as e:
+        logging.error(f"Failed to list jobs: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to list jobs")
+
+
 @app.post("/train", response_model=JobSubmitResponse)
 async def start_training(request: TrainRequest):
     processed_dataset_id = request.processed_dataset_id
@@ -72,6 +91,7 @@ async def start_training(request: TrainRequest):
         updated_at=datetime.now(timezone.utc),
         processed_dataset_id=request.processed_dataset_id,
         base_model_id=request.training_config.base_model_id,
+        job_name=request.job_name,
     )
     job_manager.ensure_job_document_exists(job_id, job_metadata)
 
