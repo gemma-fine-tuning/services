@@ -25,6 +25,7 @@ Start a new training job.
 ```json
 {
   "processed_dataset_id": "dataset_abc123",
+  "job_name": "My Training Job",
   "hf_token": "hf_...",
   "training_config": {
     "method": "LoRA" | "QLoRA" | "Full" | "RL",
@@ -52,6 +53,24 @@ Start a new training job.
 }
 ```
 
+### GET `/jobs`
+
+List all jobs.
+
+**Response:**
+
+```json
+{
+  "jobs": [
+    {
+      "job_id": "training_abc123_gemma-2b_def456",
+      "job_name": "My Training Job",
+      "job_status": "queued" | "preparing" | "training" | "completed" | "failed" | "unknown"
+    }
+  ]
+}
+```
+
 ### GET `/jobs/{job_id}/status`
 
 Get training job status.
@@ -60,6 +79,7 @@ Get training job status.
 
 ```json
 {
+  "job_name": "My Training Job",
   "status": "queued" | "preparing" | "training" | "completed" | "failed",
   "wandb_url": "https://wandb.ai/...",
   "adapter_path": "gs://bucket/path",
