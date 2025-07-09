@@ -1,45 +1,66 @@
 # Text Augmentation Module
 
-This module provides a unified, robust interface for text augmentation, supporting EDA, Back Translation, Paraphrasing, and LLM Synthesis (Gemini). It is optimized for LLM fine-tuning and dataset expansion.
+This module provides comprehensive text augmentation capabilities including:
+
+- EDA (Easy Data Augmentation)
+- Back Translation
+- Paraphrasing
+- Conversational augmentation
 
 ---
 
 ## Quick Start
 
+### Simplified pipeline interface
+
+```python
+from preprocessing.augmentation import run_augment_pipeline
+
+augmented_dataset, result = run_augment_pipeline(
+    dataset,
+    {
+        "use_eda": True,
+        "eda_alpha_sr": 0.1,
+        # Other settings as needed
+    }
+)
+```
+
+### Creating custom configurations
+
 ```python
 from preprocessing.augmentation import (
     AugmentationManager,
-    create_lightweight_config,
-    create_full_config,
+    AugmentationConfig,
+    AugmentationMethod,
     run_augment_pipeline,
 )
 
-# Lightweight (EDA only)
+# High-level interface: use AugmentationManager and AugmentationConfig
 manager = AugmentationManager()
-config = create_lightweight_config(augmentation_factor=1.5)
-manager.configure(config)
-augmented_dataset, result = manager.augment_dataset(dataset)
-
-# Full config (all methods)
-config = create_full_config(
-    augmentation_factor=2.0,
-    enable_synthesis=True,
-    gemini_api_key="your-api-key",
-    custom_prompt="Focus on educational content with clear explanations.",
-    synthesis_ratio=0.3,
-    system_message="You are a helpful AI assistant.",
-    max_batch_size=10,
+config = AugmentationConfig(
+    enabled_methods=[AugmentationMethod.EDA, AugmentationMethod.BACK_TRANSLATION],
+    augmentation_factor=1.5,
 )
 manager.configure(config)
 augmented_dataset, result = manager.augment_dataset(dataset)
+
+# Or use the simplified pipeline interface
+augmented_dataset, result = run_augment_pipeline(
+    dataset,
+    {
+        "use_eda": True,
+        "eda_alpha_sr": 0.1,
+        # Other settings as needed
+    }
+)
 ```
 
 ---
 
-## Configuration
+## Low-level configurations
 
-- **Lightweight**: EDA only, fast, no dependencies.
-- **Full**: All methods, including synthesis and transformer-based methods.
+- **Custom**: Use `AugmentationConfig` directly for full control.
 
 ```python
 from preprocessing.augmentation import AugmentationConfig, AugmentationMethod
@@ -52,12 +73,10 @@ config = AugmentationConfig(
         AugmentationMethod.SYNTHESIS,
     ],
     augmentation_factor=1.8,
-    lightweight_mode=False,
     eda_settings={"eda_alpha_sr": 0.15},
     back_translation_settings={"intermediate_lang": "es"},
     paraphrasing_settings={"paraphrase_model": "humarin/chatgpt_paraphraser_on_T5_base"},
     synthesis_settings={
-        "enable_synthesis": True,
         "gemini_api_key": "your-api-key",
         "custom_prompt": "Focus on educational content.",
         "synthesis_ratio": 0.7,
@@ -99,21 +118,14 @@ config = AugmentationConfig(
 #### Custom Prompt Example
 
 ```python
-config = create_full_config(
-    enable_synthesis=True,
-    gemini_api_key="your-api-key",
-    custom_prompt="""
-You are generating training data for an educational AI assistant.
-
-When synthesizing conversations, please ensure:
-- Focus on educational topics like programming, data science, mathematics
-- Questions should be at beginner to intermediate level
-- Answers should be informative but accessible
-- Include practical examples when possible
-- Avoid controversial or sensitive topics
-""",
-    synthesis_ratio=0.7,
-    system_message="You are a helpful educational assistant."
+config = AugmentationConfig(
+    enabled_methods=[AugmentationMethod.EDA, AugmentationMethod.SYNTHESIS],
+    synthesis_settings={
+        "gemini_api_key": "your-api-key",
+        "custom_prompt": "Focus on educational content.",
+        "synthesis_ratio": 0.7,
+        "system_message": "You are a helpful educational assistant."
+    }
 )
 ```
 
@@ -130,7 +142,6 @@ config = {
         "lightweight": False,
         "augmentation_factor": 2.0,
         "pipeline_config": {
-            "enable_synthesis": True,
             "gemini_api_key": "your-api-key",
             "custom_prompt": "Focus on educational content.",
             "synthesis_ratio": 0.7,
@@ -150,15 +161,16 @@ response = requests.post("/preprocess", json={
 
 ## Configuration Reference
 
-| Field                       | Type                       | Description                    | Default  |
-| --------------------------- | -------------------------- | ------------------------------ | -------- |
-| `enabled_methods`           | `List[AugmentationMethod]` | Methods to enable              | Required |
-| `augmentation_factor`       | `float`                    | Dataset size multiplier        | `1.5`    |
-| `lightweight_mode`          | `bool`                     | Use only fast methods          | `True`   |
-| `eda_settings`              | `Dict`                     | EDA parameters                 | `{}`     |
-| `back_translation_settings` | `Dict`                     | Back translation parameters    | `{}`     |
-| `paraphrasing_settings`     | `Dict`                     | Paraphrasing parameters        | `{}`     |
-| `synthesis_settings`        | `Dict`                     | Synthesis parameters           | `{}`     |
+| Field                       | Type                       | Description                 | Default  |
+| --------------------------- | -------------------------- | --------------------------- | -------- |
+| `enabled_methods`           | `List[AugmentationMethod]` | Methods to enable           | Required |
+| `augmentation_factor`       | `float`                    | Dataset size multiplier     | `1.5`    |
+| `eda_settings`              | `EDASettings`              | EDA parameters              | `{}`     |
+| `back_translation_settings` | `BackTranslationSettings`  | Back translation parameters | `{}`     |
+| `paraphrasing_settings`     | `ParaphrasingSettings`     | Paraphrasing parameters     | `{}`     |
+| `synthesis_settings`        | `SynthesisSettings`        | Synthesis parameters        | `{}`     |
+
+The internal structures of augmentation settings and synthesis settings are defined in `text_augmentor.py` but are not needed for the user, since currently we do not support customising parameters for augmentation methods.
 
 ---
 
@@ -172,7 +184,7 @@ response = requests.post("/preprocess", json={
 
 ## Troubleshooting
 
-- **Synthesis not applied**: Check `enable_synthesis`, API key, and `custom_prompt`.
+- **Synthesis not applied**: Check API key and `custom_prompt`.
 - **Low quality**: Make prompts more specific, add examples, adjust `synthesis_ratio`.
 - **Dependency issues**: Ensure required libraries are installed.
 

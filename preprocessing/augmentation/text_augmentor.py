@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, TypedDict
 from abc import ABC, abstractmethod
 from .eda import eda
 import random
@@ -23,6 +23,31 @@ class BaseAugmentor(ABC):
     def augment(self, text: str) -> str:
         """Apply augmentation to text"""
         pass
+
+
+class EDASettings(TypedDict, total=False):
+    eda_alpha_sr: float
+    eda_alpha_ri: float
+    eda_alpha_rs: float
+    eda_p_rd: float
+    num_aug: int
+
+
+class BackTranslationSettings(TypedDict, total=False):
+    intermediate_lang: str
+
+
+class ParaphrasingSettings(TypedDict, total=False):
+    paraphrase_model: str
+
+
+class SynthesisSettings(TypedDict, total=False):
+    gemini_api_key: str
+    gemini_model: str
+    synthesis_ratio: float
+    system_message: str
+    max_batch_size: int
+    custom_prompt: str
 
 
 class EDAugmentor(BaseAugmentor):
@@ -141,6 +166,11 @@ class BackTranslationAugmentor(BaseAugmentor):
         try:
             self._load_models()
 
+            if self._forward_model is None or self._backward_model is None:
+                raise ValueError("Back translation models not loaded")
+            if self._forward_tokenizer is None or self._backward_tokenizer is None:
+                raise ValueError("Back translation tokenizers not loaded")
+
             # Translate to intermediate language
             forward_inputs = self._forward_tokenizer(
                 text, return_tensors="pt", padding=True, truncation=True, max_length=512
@@ -230,6 +260,9 @@ class ParaphraseAugmentor(BaseAugmentor):
         This method references the example usage from https://huggingface.co/humarin/chatgpt_paraphraser_on_T5_base
         Try not to modify the parameters since they are providers by the original author and is most likely to work best.
         """
+        if self._model is None or self._tokenizer is None:
+            raise ValueError("Paraphrasing model not loaded")
+
         input_ids = self._tokenizer(
             f"paraphrase: {question}",
             return_tensors="pt",
@@ -287,7 +320,7 @@ class TextAugmentationPipeline:
         self,
         augmentors: Dict[str, Any],
         synthesizer=None,
-        synthesis_settings: Dict[str, Any] = None,
+        synthesis_settings: Optional[SynthesisSettings] = None,
     ):
         self.augmentors = augmentors
         self.synthesizer = synthesizer

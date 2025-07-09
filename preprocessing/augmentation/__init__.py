@@ -19,7 +19,6 @@ manager = AugmentationManager()
 config = AugmentationConfig(
     enabled_methods=[AugmentationMethod.EDA, AugmentationMethod.BACK_TRANSLATION],
     augmentation_factor=1.5,
-    lightweight_mode=True,
 )
 manager.configure(config)
 augmented_dataset, result = manager.augment_dataset(dataset)

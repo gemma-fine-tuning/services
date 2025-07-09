@@ -7,6 +7,10 @@ from .text_augmentor import (
     EDAugmentor,
     BackTranslationAugmentor,
     ParaphraseAugmentor,
+    EDASettings,
+    BackTranslationSettings,
+    ParaphrasingSettings,
+    SynthesisSettings,
 )
 from .gemini_synthesizer import GeminiSynthesizer
 from .text_augmentor import TextAugmentationPipeline
@@ -35,13 +39,12 @@ class AugmentationConfig:
 
     # General settings
     augmentation_factor: float = 1.5
-    lightweight_mode: bool = False
 
     # Method-specific settings
-    eda_settings: Optional[Dict[str, Any]] = None
-    back_translation_settings: Optional[Dict[str, Any]] = None
-    paraphrasing_settings: Optional[Dict[str, Any]] = None
-    synthesis_settings: Optional[Dict[str, Any]] = None
+    eda_settings: Optional[EDASettings] = None
+    back_translation_settings: Optional[BackTranslationSettings] = None
+    paraphrasing_settings: Optional[ParaphrasingSettings] = None
+    synthesis_settings: Optional[SynthesisSettings] = None
 
     def __post_init__(self):
         """Validate configuration after initialization"""
@@ -68,9 +71,9 @@ class AugmentationResult:
 
     original_count: int
     final_count: int
-    methods_used: List[str] = None
-    synthesis_used: bool = False
-    errors: List[str] = None
+    methods_used: List[str]
+    synthesis_used: bool
+    errors: List[str]
 
     @property
     def success_rate(self) -> float:
@@ -97,27 +100,30 @@ class AugmentationManager:
         """Check if manager is properly configured"""
         return self._config is not None
 
+    def _require_config(self):
+        if self._config is None:
+            raise ValueError("Manager not configured. Call configure() first.")
+
     def get_available_methods(self) -> List[str]:
         """Get list of actually available methods (not just configured)"""
-        if not self.is_configured():
-            return []
-
+        self._require_config()
+        config: AugmentationConfig = self._config  # type: ignore
         available = []
 
         # EDA is always available (no dependencies)
-        if AugmentationMethod.EDA in self._config.enabled_methods:
+        if AugmentationMethod.EDA in config.enabled_methods:
             available.append("eda")
 
         # Check if transformers is available for other methods
-        if AugmentationMethod.BACK_TRANSLATION in self._config.enabled_methods:
+        if AugmentationMethod.BACK_TRANSLATION in config.enabled_methods:
             available.append("back_translation")
 
-        if AugmentationMethod.PARAPHRASING in self._config.enabled_methods:
+        if AugmentationMethod.PARAPHRASING in config.enabled_methods:
             available.append("paraphrasing")
 
         # Check if synthesis is properly configured
-        if AugmentationMethod.SYNTHESIS in self._config.enabled_methods:
-            synthesis_config = self._config.synthesis_settings
+        if AugmentationMethod.SYNTHESIS in config.enabled_methods:
+            synthesis_config = config.synthesis_settings or {}
             api_key = synthesis_config.get("gemini_api_key")
             if api_key:
                 available.append("synthesis")
@@ -138,9 +144,8 @@ class AugmentationManager:
         Returns:
             Tuple of (augmented_dataset, augmentation_result)
         """
-        if not self.is_configured():
-            raise ValueError("Manager not configured. Call configure() first.")
-
+        self._require_config()
+        config: AugmentationConfig = self._config  # type: ignore
         if not dataset:
             return dataset, AugmentationResult(
                 original_count=0,
@@ -176,7 +181,7 @@ class AugmentationManager:
             )
 
             augmented_dataset = self._pipeline.augment_dataset(
-                dataset, augmentation_factor=self._config.augmentation_factor
+                dataset, augmentation_factor=config.augmentation_factor
             )
 
             synthesis_used = "synthesis" in available_methods
@@ -204,29 +209,30 @@ class AugmentationManager:
 
     def _create_pipeline(self, available_methods: List[str]):
         """Create the actual augmentation pipeline based on available methods"""
-
+        self._require_config()
+        config: AugmentationConfig = self._config  # type: ignore
         # Create augmentors
         augmentors = {}
         synthesizer = None
 
         if "eda" in available_methods:
-            eda_settings = self._config.eda_settings
+            eda_settings = config.eda_settings or {}
             augmentors["eda"] = EDAugmentor(
                 alpha_sr=eda_settings.get("eda_alpha_sr", 0.1),
                 alpha_ri=eda_settings.get("eda_alpha_ri", 0.1),
                 alpha_rs=eda_settings.get("eda_alpha_rs", 0.1),
                 p_rd=eda_settings.get("eda_p_rd", 0.1),
-                num_aug=1,
+                num_aug=eda_settings.get("num_aug", 1),
             )
 
         if "back_translation" in available_methods:
-            bt_settings = self._config.back_translation_settings
+            bt_settings = config.back_translation_settings or {}
             augmentors["back_translation"] = BackTranslationAugmentor(
                 intermediate_lang=bt_settings.get("intermediate_lang", "fr")
             )
 
         if "paraphrasing" in available_methods:
-            para_settings = self._config.paraphrasing_settings
+            para_settings = config.paraphrasing_settings or {}
             augmentors["paraphrasing"] = ParaphraseAugmentor(
                 model_name=para_settings.get(
                     "paraphrase_model", "humarin/chatgpt_paraphraser_on_T5_base"
@@ -234,104 +240,37 @@ class AugmentationManager:
             )
 
         if "synthesis" in available_methods:
-            synth_settings = self._config.synthesis_settings
-            api_key = synth_settings.get("gemini_api_key")
+            synth_settings = config.synthesis_settings or None
+            api_key = synth_settings.get("gemini_api_key") if synth_settings else None
             if api_key:
                 synthesizer = GeminiSynthesizer(
                     api_key=api_key,
                     model_name=synth_settings.get(
                         "gemini_model", "gemini-2.0-flash-001"
-                    ),
+                    )
+                    if synth_settings
+                    else "gemini-2.0-flash-001",
                 )
 
         return TextAugmentationPipeline(
             augmentors=augmentors,
             synthesizer=synthesizer,
-            synthesis_settings=self._config.synthesis_settings,
+            synthesis_settings=config.synthesis_settings,
         )
 
     def get_stats(self) -> Dict[str, Any]:
         """Get current configuration and availability stats"""
-        if not self.is_configured():
-            return {"configured": False}
-
+        self._require_config()
+        config: AugmentationConfig = self._config  # type: ignore
         available_methods = self.get_available_methods()
 
         return {
             "configured": True,
-            "enabled_methods": [m.value for m in self._config.enabled_methods],
+            "enabled_methods": [m.value for m in config.enabled_methods],
             "available_methods": available_methods,
-            "augmentation_factor": self._config.augmentation_factor,
-            "lightweight_mode": self._config.lightweight_mode,
+            "augmentation_factor": config.augmentation_factor,
             "synthesis_available": "synthesis" in available_methods,
         }
-
-
-# Convenience functions for common configurations
-
-
-@DeprecationWarning
-def create_lightweight_config(augmentation_factor: float = 1.5) -> AugmentationConfig:
-    """Create a lightweight configuration using only EDA"""
-    return AugmentationConfig(
-        enabled_methods=[AugmentationMethod.EDA],
-        augmentation_factor=augmentation_factor,
-        lightweight_mode=True,
-        eda_settings={
-            "eda_alpha_sr": 0.1,
-            "eda_alpha_ri": 0.1,
-            "eda_alpha_rs": 0.1,
-            "eda_p_rd": 0.1,
-        },
-    )
-
-
-@DeprecationWarning
-def create_full_config(
-    augmentation_factor: float = 1.5,
-    enable_synthesis: bool = False,
-    gemini_api_key: Optional[str] = None,
-    **kwargs,
-) -> AugmentationConfig:
-    """Create a full configuration with all methods"""
-    methods = [
-        AugmentationMethod.EDA,
-        AugmentationMethod.BACK_TRANSLATION,
-        AugmentationMethod.PARAPHRASING,
-    ]
-
-    synthesis_settings = {}
-    if enable_synthesis:
-        methods.append(AugmentationMethod.SYNTHESIS)
-        synthesis_settings = {
-            "gemini_api_key": gemini_api_key,
-            "gemini_model": kwargs.get("gemini_model", "gemini-2.0-flash-001"),
-            "synthesis_ratio": kwargs.get("synthesis_ratio", 0.5),
-            "system_message": kwargs.get("system_message", ""),
-            "max_batch_size": kwargs.get("max_batch_size", 10),
-            "custom_prompt": kwargs.get("custom_prompt", ""),
-        }
-
-    return AugmentationConfig(
-        enabled_methods=methods,
-        augmentation_factor=augmentation_factor,
-        lightweight_mode=False,
-        eda_settings={
-            "eda_alpha_sr": kwargs.get("eda_alpha_sr", 0.1),
-            "eda_alpha_ri": kwargs.get("eda_alpha_ri", 0.1),
-            "eda_alpha_rs": kwargs.get("eda_alpha_rs", 0.1),
-            "eda_p_rd": kwargs.get("eda_p_rd", 0.1),
-        },
-        back_translation_settings={
-            "intermediate_lang": kwargs.get("intermediate_lang", "fr"),
-        },
-        paraphrasing_settings={
-            "paraphrase_model": kwargs.get(
-                "paraphrase_model", "humarin/chatgpt_paraphraser_on_T5_base"
-            ),
-        },
-        synthesis_settings=synthesis_settings,
-    )
 
 
 def run_augment_pipeline(dataset, user_preferences):
@@ -381,6 +320,8 @@ def run_augment_pipeline(dataset, user_preferences):
     if not dataset:
         logger.warning("Empty dataset provided to run_augment_pipeline")
         return dataset, AugmentationResult(
+            methods_used=[],
+            synthesis_used=False,
             original_count=0,
             final_count=0,
             errors=["Empty dataset provided"],
@@ -415,7 +356,6 @@ def run_augment_pipeline(dataset, user_preferences):
         config = AugmentationConfig(
             enabled_methods=enabled_methods,
             augmentation_factor=augmentation_factor,
-            lightweight_mode=user_preferences.get("lightweight_mode", False),
             # Method-specific settings
             eda_settings={
                 "eda_alpha_sr": user_preferences.get("eda_synonym_rate", 0.1),
@@ -452,6 +392,8 @@ def run_augment_pipeline(dataset, user_preferences):
     except Exception as e:
         logger.error(f"Error in run_augment_pipeline: {e}")
         return dataset, AugmentationResult(
+            methods_used=[],
+            synthesis_used=False,
             original_count=len(dataset),
             final_count=len(dataset),
             errors=[f"Configuration error: {str(e)}"],
