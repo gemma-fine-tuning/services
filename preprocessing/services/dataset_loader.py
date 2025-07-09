@@ -1,5 +1,4 @@
 import logging
-from typing import Optional
 from datasets import load_dataset, DatasetDict
 from storage.base import StorageInterface
 from schema import (
@@ -39,12 +38,12 @@ class DatasetLoader:
         """
         self.storage = storage
 
-    async def load_dataset(
+    def load_dataset(
         self,
         dataset_source: str,
         dataset_id: str,
         config: PreprocessingConfig,
-        dataset_subset: Optional[str] = "default",
+        dataset_subset: str = "default",
     ) -> DatasetDict:
         """
         Load a dataset from the specified source.
@@ -87,9 +86,9 @@ class DatasetLoader:
 
         try:
             if dataset_source == "upload":
-                return await self._load_uploaded_dataset(dataset_id, config)
+                return self._load_uploaded_dataset(dataset_id, config)
             elif dataset_source == "huggingface":
-                return await self._load_huggingface_dataset(
+                return self._load_huggingface_dataset(
                     dataset_id, dataset_subset, config
                 )
             else:
@@ -195,7 +194,7 @@ class DatasetLoader:
             else:
                 return dataset
 
-    async def _load_huggingface_dataset(
+    def _load_huggingface_dataset(
         self, dataset_name: str, dataset_subset: str, config: PreprocessingConfig
     ) -> DatasetDict:
         """

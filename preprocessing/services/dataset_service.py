@@ -3,8 +3,8 @@ import json
 import logging
 import pyarrow.parquet as pq
 from datetime import datetime
-from datasets import Dataset
-from typing import Dict, List, Optional
+from datasets import Dataset, DatasetDict
+from typing import Dict, Literal, Optional
 from storage.base import StorageInterface
 from .dataset_handler import DatasetHandler
 from .dataset_loader import DatasetLoader
@@ -107,13 +107,13 @@ class DatasetService:
         """
         return self.handler.upload_dataset(file_data, filename, metadata)
 
-    async def process_dataset(
+    def process_dataset(
         self,
         dataset_name: str,
-        dataset_source: str,
+        dataset_source: Literal["upload", "huggingface"],
         dataset_id: str,
         config: PreprocessingConfig,
-        dataset_subset: Optional[str] = "default",
+        dataset_subset: str = "default",
     ) -> ProcessingResult:
         """
         Process a dataset to ChatML format.
@@ -172,7 +172,7 @@ class DatasetService:
             ...         "augmentation_factor": 1.5
             ...     }
             ... )
-            >>> result = await service.process_dataset(
+            >>> result = service.process_dataset(
             ...     "my_dataset",
             ...     "upload",
             ...     "my_dataset_id",
@@ -187,14 +187,14 @@ class DatasetService:
                 )
 
             # Load dataset with splits
-            dataset = await self.loader.load_dataset(
+            dataset = self.loader.load_dataset(
                 dataset_source, dataset_id, config, dataset_subset
             )
 
             if not dataset:
                 raise ValueError("Dataset is empty or could not be loaded")
 
-            config_dict = config.dict()
+            config_dict = config.model_dump()
 
             processed_dataset = self.converter.convert_to_chatml(dataset, config_dict)
 
@@ -204,7 +204,7 @@ class DatasetService:
             # Apply data augmentation if the user created a config specification
             augmentation_config = config_dict.get("augmentation_config", {})
             if augmentation_config:
-                processed_dataset = self._apply_augmentation(
+                processed_dataset = self._augment_all_splits(
                     processed_dataset, augmentation_config
                 )
 
@@ -354,38 +354,35 @@ class DatasetService:
             logger.error(f"Error getting dataset info: {str(e)}")
             raise
 
-    def _augment_split(
-        self, split_data: List[Dict], augmentation_config: Dict
-    ) -> List[Dict]:
+    def _augment_all_splits(
+        self, dataset: DatasetDict, augmentation_config: Dict
+    ) -> DatasetDict:
         """
         Apply augmentation to a single split or list of data.
 
         Args:
-            split_data (List[Dict]): The data to augment
+            dataset (DatasetDict): The dataset to augment
             augmentation_config (Dict): Configuration for the augmentation pipeline
 
         Returns:
-            List[Dict]: The augmented data
+            DatasetDict: The augmented dataset, each split is a Dataset
         """
         try:
-            if not split_data:
-                return split_data
+            for split in dataset.keys():
+                # Apply augmentation pipeline
+                augmented_dataset, result = run_augment_pipeline(
+                    dataset[split].to_list(), augmentation_config
+                )
 
-            # Convert to HuggingFace Dataset for augmentation
-            hf_dataset = Dataset.from_list(split_data)
+                # Log results
+                if result.errors:
+                    for error in result.errors:
+                        logger.warning(f"Augmentation error: {error}")
 
-            # Apply augmentation pipeline
-            augmented_list, result = run_augment_pipeline(
-                hf_dataset.to_list(), augmentation_config
-            )
+                dataset[split] = Dataset.from_list(augmented_dataset)
 
-            # Log results
-            if result.errors:
-                for error in result.errors:
-                    logger.warning(f"Augmentation error: {error}")
-
-            return augmented_list
+            return dataset
 
         except Exception as e:
             logger.error(f"Split augmentation failed: {e}")
-            return split_data
+            return dataset

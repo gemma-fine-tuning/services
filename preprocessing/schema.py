@@ -67,7 +67,7 @@ class PreprocessingRequest(BaseModel):
     dataset_name: str
     dataset_source: Literal["upload", "huggingface"]
     dataset_id: str
-    dataset_subset: Optional[str] = "default"
+    dataset_subset: str = "default"
     config: PreprocessingConfig
 
 

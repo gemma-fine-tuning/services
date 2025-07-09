@@ -62,7 +62,7 @@ async def upload_dataset(file: UploadFile = File(...)):
 
         result = dataset_service.upload_dataset(
             file_data=file_content,
-            filename=file.filename,
+            filename=file.filename or "unknown",
             metadata={"content_type": file.content_type},
         )
 
@@ -74,7 +74,7 @@ async def upload_dataset(file: UploadFile = File(...)):
 
 
 @app.post("/process", response_model=ProcessingResult)
-async def process_dataset(request: PreprocessingRequest):
+def process_dataset(request: PreprocessingRequest):
     """Process a dataset into ChatML format
 
     The processing converts the dataset to ChatML format using the provided configuration.
@@ -91,7 +91,7 @@ async def process_dataset(request: PreprocessingRequest):
     ```
     """
     try:
-        result = await dataset_service.process_dataset(
+        result = dataset_service.process_dataset(
             dataset_name=request.dataset_name,
             dataset_source=request.dataset_source,
             dataset_id=request.dataset_id,
