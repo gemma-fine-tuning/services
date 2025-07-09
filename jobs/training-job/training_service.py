@@ -121,7 +121,8 @@ class HuggingFaceTrainingService(BaseTrainingService):
             processed_dataset_id = req.processed_dataset_id
             model_cfg = req.training_config.model_dump()
             base_model_id = model_cfg.get("base_model_id", "google/gemma-3-1b-it")
-            job_id = f"training_{processed_dataset_id}_{base_model_id.split('/')[-1]}"
+            # Use the job_id from the job_tracker
+            job_id = job_tracker.job_id
 
             logging.info(
                 f"Starting HuggingFace training job {job_id} with model {base_model_id}"
@@ -454,7 +455,6 @@ class UnslothTrainingService(BaseTrainingService):
 
     def __init__(self) -> None:
         # Import Unsloth libraries only when this service is instantiated
-        import unsloth
         from unsloth import FastModel
         from unsloth.chat_templates import (
             get_chat_template,
@@ -506,7 +506,7 @@ class UnslothTrainingService(BaseTrainingService):
             base_model_id = model_cfg.get(
                 "base_model_id", "unsloth/gemma-3-1b-it-unsloth-bnb-4bit"
             )
-            job_id = f"training_{processed_dataset_id}_{base_model_id.split('/')[-1]}"
+            job_id = job_tracker.job_id
 
             logging.info(
                 f"Starting Unsloth training job {job_id} with model {base_model_id}"

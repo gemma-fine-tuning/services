@@ -167,7 +167,6 @@ class InferenceService:
         adapter_path: str,
         prompts: List[str],
     ) -> List[str]:
-        import unsloth
         from unsloth import FastModel
         from unsloth.chat_templates import get_chat_template
 
