@@ -1,7 +1,7 @@
 import logging
 import torch
 from abc import ABC, abstractmethod
-from model_storage import storage_service, StorageStrategyFactory
+from storage import storage_service, StorageStrategyFactory
 from schema import TrainRequest, WandbConfig
 from typing import Optional, Tuple, List, Dict, Any
 from job_manager import JobTracker

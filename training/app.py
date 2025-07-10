@@ -44,15 +44,29 @@ async def health_check():
     return {"status": "healthy", "service": "training"}
 
 
-def make_job_id(processed_dataset_id, base_model_id, request):
+def make_job_id(
+    processed_dataset_id: str, base_model_id: str, request: TrainRequest
+) -> str:
     """
     Creates a job ID for a training job.
+
     This has the following properties:
     - IDs are only the same if the processed dataset ID, base model ID, and request are the same
     - IDs are deterministic, i.e. same request will always produce the same ID
     - IDs are short because we truncate the hash to 8 characters
+
+    This is desired because the exact same job will overwrite the previous one and avoid confusion and resource waste.
+    This also makes tracking in firestore consistent.
+
+    Args:
+        processed_dataset_id (str): dataset_name, this might contain spaces we need to replace them first
+        base_model_id (str): The ID of the base model
+        request (TrainRequest): The request object
+
+    Returns:
+        str: The job ID
     """
-    base = f"training_{processed_dataset_id}_{base_model_id.split('/')[-1]}"
+    base = f"training_{processed_dataset_id.replace(' ', '-')}_{base_model_id.split('/')[-1]}"
     request_str = json.dumps(request.model_dump(), sort_keys=True)
     short_hash = hashlib.sha256(request_str.encode()).hexdigest()[:8]
     return f"{base}_{short_hash}"

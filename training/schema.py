@@ -32,7 +32,7 @@ class WandbConfig(BaseModel):
 class TrainRequest(BaseModel):
     job_name: str
     # This struct is shared between the API and the backend service
-    processed_dataset_id: str
+    processed_dataset_id: str  # this is dataset_name for now
     # NOTE: This is marked optional for dev but in deployment it should be required
     hf_token: Optional[str] = None
     training_config: TrainingConfig

@@ -7,7 +7,7 @@ Cloud Run job that executes fine-tuning on Gemma models.
 - **`main.py`** - Job entry point, loads config and starts training
 - **`training_service.py`** - Core training logic with provider support
 - **`job_manager.py`** - Job state tracking and Firestore integration
-- **`model_storage.py`** - Model saving/loading from GCS/HF Hub
+- **`storage.py`** - Model and dataset saving/loading from GCS/HF Hub
 - **`schema.py`** - Training configuration models
 
 ## Deployment
@@ -15,6 +15,10 @@ Cloud Run job that executes fine-tuning on Gemma models.
 ```bash
 gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
 ```
+
+- Cloud Run job with GPU support (L4)
+- Memory: 16Gi, CPU: 4 cores
+- GPU: 1x NVIDIA L4
 
 ## Execution Flow
 
@@ -67,9 +71,3 @@ gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
 - **Weights & Biases**: Training metrics and model logging
 - **Firestore**: Job status tracking
 - **Cloud Logging**: Execution logs
-
-## Deployment
-
-- Cloud Run job with GPU support (L4)
-- Memory: 16Gi, CPU: 4 cores
-- GPU: 1x NVIDIA L4
