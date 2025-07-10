@@ -29,6 +29,16 @@ This service follows a simplified 5-component architecture:
 
 ## Deployment
 
+### Cloud Deployment
+
+> IMPORTANT: This has been updated so pls use this command below:
+
+```bash
+gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
+```
+
+This command will handle building, pushing, and deploying Cloud Run service.
+
 ### Local Development
 
 This application uses [`uv`](https://docs.astral.sh/uv/) for dependency management instead of `pip`, hence, the following commands use `uv` instead of `pip`. However, you can use `pip` if you prefer.

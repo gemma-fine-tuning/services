@@ -1,4 +1,3 @@
-.gcloudignore
 .git
 .gitignore
 __pycache__/
@@ -22,17 +21,5 @@ coverage.xml
 *.egg-info/
 dist/
 build/
-data/
-*.json
-*.csv
-*.parquet
-README.md
-*.md
-.env
-.venv
+.venv/
 venv/
-.idea/
-*.swp
-*.swo
-.pytest_cache/
-.ipynb_checkpoints/

@@ -1,27 +1,26 @@
-FROM python:3.9-slim
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
+FROM python:3.12-slim
 
 # Set working directory
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install system dependencies and UV
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir uv
+
+# Copy requirements
+COPY pyproject.toml uv.lock ./
+
+# Install Python dependencies using UV
+RUN uv sync --frozen --no-cache
 
 # Copy application code
 COPY . .
 
-# Set environment variables
-ENV PYTHONPATH=/app
-ENV PORT=8080
-
 # Expose port
 EXPOSE 8080
 
-# Run the application
-CMD exec uvicorn app:app --host 0.0.0.0 --port $PORT
+# Run the application with gunicorn
+CMD ["uv", "run", "app.py"]
