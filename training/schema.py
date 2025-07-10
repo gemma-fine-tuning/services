@@ -52,6 +52,7 @@ class JobStatusResponse(BaseModel):
     job_name: str
     status: Literal["queued", "preparing", "training", "completed", "failed"]
     wandb_url: Optional[str] = None
+    processed_dataset_id: Optional[str] = None
     adapter_path: Optional[str] = None
     base_model_id: Optional[str] = None
     error: Optional[str] = None

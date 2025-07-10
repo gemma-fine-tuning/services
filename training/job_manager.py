@@ -30,7 +30,6 @@ class JobMetadata:
     adapter_path: Optional[str] = None
     wandb_url: Optional[str] = None
     error: Optional[str] = None
-    progress_info: Optional[Dict[str, Any]] = None
 
 
 class JobStateManager:
@@ -79,7 +78,6 @@ class JobStateManager:
                 adapter_path=data.get("adapter_path"),
                 wandb_url=data.get("wandb_url"),
                 error=data.get("error"),
-                progress_info=data.get("progress_info", {}),
             )
         except Exception as e:
             self.logger.error(f"Failed to get job {job_id}: {e}")
@@ -110,7 +108,6 @@ class JobStateManager:
             "adapter_path": job.adapter_path,
             "wandb_url": job.wandb_url,
             "error": job.error,
-            "progress_info": job.progress_info,
         }
 
     def ensure_job_document_exists(
@@ -145,7 +142,6 @@ class JobStateManager:
                     "adapter_path": job_metadata.adapter_path,
                     "wandb_url": job_metadata.wandb_url,
                     "error": job_metadata.error,
-                    "progress_info": job_metadata.progress_info,
                 }
             )
 
