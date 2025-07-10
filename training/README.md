@@ -1,78 +1,107 @@
 # Training Service
 
-This service handles the fine-tuning of Gemma models using LoRA. It pulls datasets from GCS, loads the model, configures training parameters based on user input, and saves the trained adapter to GCS.
+FastAPI service for managing fine-tuning jobs on Gemma models.
 
-Implementation follows [Gemma Fine Tuning (Text) Guide](https://ai.google.dev/gemma/docs/core/huggingface_text_finetune_qlora).
+## Structure
 
-## Deploying to Cloud Run with GPU Support
+- **`app.py`** - FastAPI application with job management endpoints
+- **`job_manager.py`** - Job state management with Firestore
+- **`schema.py`** - Request/response models
 
-Refer to [this documentation](https://cloud.google.com/run/docs/configuring/services/gpu) for more info. I already have the artifacts repository created for the gemma-fine-tuning project.
-
-```bash
-gcloud artifacts repositories create gemma-fine-tuning \
-  --repository-format docker \
-  --location us-central1
-```
-
-Set the `PROJECT_ID` and `DATA_BUCKET_NAME` and `EXPORT_BUCKET_NAME` environment variables:
+## Deployment
 
 ```bash
-export PROJECT_ID=your-project-id
-export DATA_BUCKET_NAME=gemma-dataset-dev
-export EXPORT_BUCKET_NAME=gemma-export-dev
+gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
 ```
 
-1. **Build and Push the Docker Image**
+## Endpoints
 
-```bash
-docker build -t us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service .
+### POST `/train`
 
-docker push us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service
+Start a new training job.
+
+**Request:**
+
+```json
+{
+  "processed_dataset_id": "dataset_abc123",
+  "job_name": "My Training Job",
+  "hf_token": "hf_...",
+  "training_config": {
+    "method": "LoRA" | "QLoRA" | "Full" | "RL",
+    "base_model_id": "google/gemma-2b",
+    "learning_rate": 0.0001,
+    "batch_size": 4,
+    "epochs": 3,
+    "gradient_accumulation_steps": 4,
+    "provider": "unsloth" | "huggingface"
+  },
+  "export": "gcs" | "hfhub",
+  "hf_repo_id": "user/model-name",
+  "wandb_config": {
+    "api_key": "wandb_...",
+    "project": "my-project"
+  }
+}
 ```
 
-Build this on cloud build instead (recommended due to huge base image size):
+**Response:**
 
-```bash
-gcloud builds submit --tag us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service .
+```json
+{
+  "job_id": "training_abc123_gemma-2b_def456"
+}
 ```
 
-2. **Deploy to Cloud Run**
+### GET `/jobs`
 
-Default GPU type is `--gpu-type nvidia-l4`
+List all jobs.
 
-```bash
-gcloud run deploy training-service \
-  --image us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service \
-  --region us-central1 \
-  --platform managed \
-  --allow-unauthenticated \
-  --memory 16Gi \
-  --cpu 4 \
-  --no-cpu-throttling \
-  --max-instances 1 \
-  --gpu 1 \
-  --set-env-vars GCS_DATA_BUCKET_NAME=$BUCKET_NAME \
-  --set-env-vars GCS_EXPORT_BUCKET_NAME=$EXPORT_BUCKET_NAME \
-  --no-gpu-zonal-redundancy
+**Response:**
+
+```json
+{
+  "jobs": [
+    {
+      "job_id": "training_abc123_gemma-2b_def456",
+      "job_name": "My Training Job",
+      "job_status": "queued" | "preparing" | "training" | "completed" | "failed" | "unknown"
+    }
+  ]
+}
 ```
 
-To remove GPU: `gcloud run services update SERVICE --gpu 0`
+### GET `/jobs/{job_id}/status`
 
-Note that for free tier you must set no zonal redundancy otherwise it will say you don't have enough quota bla bla bla.
+Get training job status.
 
-After pushing a new image you can update the service with:
+**Response:**
 
-```bash
-gcloud run services update training-service \
-  --image us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service
+```json
+{
+  "job_name": "My Training Job",
+  "status": "queued" | "preparing" | "training" | "completed" | "failed",
+  "wandb_url": "https://wandb.ai/...",
+  "adapter_path": "gs://bucket/path",
+  "base_model_id": "google/gemma-2b",
+  "error": "Error message if failed"
+}
 ```
 
-## TODO
+### GET `/health`
 
-- Implement flash attention since we're using L4 GPUs (there seemed to be some issues with the flash attention installation, so it is not included in the Dockerfile yet)
+Health check endpoint.
 
-- Add support for visual tasks once the preprocessing for that is implemented, see the multimodal guide
+## Job Lifecycle
 
-- Unsloth: https://colab.research.google.com/github/unslothai/notebooks/blob/main/nb/Gemma3_(4B).ipynb#scrollTo=kR3gIAX-SM2q
+1. **Submit** → Job queued in Firestore
+2. **Start** → Cloud Run job triggered
+3. **Track** → Status updates via Firestore
+4. **Complete** → Model exported to GCS/HF Hub
 
-- Monitoring the training job progress using TensorBoard or w&b, I intentionally disabled the built in logging and also removed using my custom logging, will add that in the future
+## Configuration
+
+- **Environment**: `PROJECT_ID`, `REGION`, `GCS_CONFIG_BUCKET_NAME`
+- **Storage**: Training configs stored in GCS
+- **Monitoring**: Weights & Biases integration
+- **Port**: 8080 (default)

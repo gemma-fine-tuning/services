@@ -1,0 +1,47 @@
+# Cloud Build configuration for training service
+# Usage: gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
+# To use cached images: gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore --substitutions=_USE_CACHE=true
+# Optionally using cached image from the artifact registry as in https://cloud.google.com/build/docs/optimize-builds/speeding-up-builds#yaml
+
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      [
+        "build",
+        "-t",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service:latest",
+        ".",
+      ]
+
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      [
+        "push",
+        "us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service:latest",
+      ]
+
+  - name: "gcr.io/cloud-builders/gcloud"
+    args:
+      [
+        "run",
+        "deploy",
+        "training-service",
+        "--image=us-central1-docker.pkg.dev/$PROJECT_ID/gemma-fine-tuning/training-service:latest",
+        "--region=us-central1",
+        "--platform=managed",
+        "--allow-unauthenticated",
+        "--memory=2Gi",
+        "--cpu=2",
+        "--set-env-vars=GCS_DATA_BUCKET_NAME=${_GCS_DATA_BUCKET_NAME},GCS_EXPORT_BUCKET_NAME=${_GCS_EXPORT_BUCKET_NAME},GCS_CONFIG_BUCKET_NAME=${_GCS_CONFIG_BUCKET_NAME}",
+        "--set-env-vars=PROJECT_ID=$PROJECT_ID",
+      ]
+
+substitutions:
+  _GCS_DATA_BUCKET_NAME: "gemma-dataset-bucket"
+  _GCS_EXPORT_BUCKET_NAME: "gemma-export-bucket"
+  _GCS_CONFIG_BUCKET_NAME: "gemma-train-config"
+
+options:
+  machineType: "E2_HIGHCPU_32"
+
+timeout: "2400s"
