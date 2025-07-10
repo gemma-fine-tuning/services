@@ -1,12 +1,14 @@
 import os
 import json
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 from google.cloud import storage
 from datasets import Dataset
 import logging
 from abc import ABC, abstractmethod
 import shutil
+import io
+import pyarrow.parquet as pq
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,15 +32,14 @@ class CloudStorageService:
     Provides a unified interface for cloud storage operations across the training pipeline.
 
     Args:
-        storage_client: Google Cloud Storage client instance
         data_bucket: GCS bucket name for storing datasets
         export_bucket: GCS bucket name for storing trained model artifacts
     """
 
-    def __init__(self, storage_client, data_bucket: str, export_bucket: str):
-        self.storage_client = storage_client
+    def __init__(self, data_bucket: str, export_bucket: str):
         self.data_bucket = data_bucket
         self.export_bucket = export_bucket
+        self.storage_client = storage.Client()
 
     def upload_model(self, model_dir: str, metadata: CloudStoredModelMetadata) -> str:
         """
@@ -85,6 +86,7 @@ class CloudStorageService:
     ) -> CloudStoredModelMetadata:
         """
         Download model artifacts and metadata from cloud storage into a local dir
+        NOTE: This is not used for now but will be used when continuing to train from a checkpoint in future
 
         Args:
             job_id (str): Unique identifier for the training job
@@ -127,15 +129,18 @@ class CloudStorageService:
             )
             raise
 
-    def download_processed_dataset(self, processed_dataset_id: str):
+    def download_processed_dataset(
+        self, processed_dataset_id: str
+    ) -> Tuple[Dataset, Optional[Dataset]]:
         """
         Download processed dataset files from GCS and return as HuggingFace Datasets.
 
         Retrieves training and optional evaluation datasets from the configured data bucket.
-        The datasets are expected to be stored as JSON files with specific naming conventions.
+        The datasets are expected to be stored as Parquet files with metadata.json in the
+        new preprocessing service format.
 
         Args:
-            processed_dataset_id (str): Identifier for the processed dataset
+            processed_dataset_id (str): Identifier for the processed dataset (dataset_name from preprocessing)
 
         Returns:
             Tuple[Dataset, Optional[Dataset]]: Train and eval datasets
@@ -145,25 +150,78 @@ class CloudStorageService:
         """
         bucket = self.storage_client.bucket(self.data_bucket)
 
-        # download train dataset
+        # First, download and parse the metadata to understand the dataset structure
+        metadata_blob = bucket.blob(
+            f"processed_datasets/{processed_dataset_id}/metadata.json"
+        )
+        if not metadata_blob.exists():
+            raise FileNotFoundError(
+                f"Dataset metadata not found for {processed_dataset_id}"
+            )
+
+        metadata = json.loads(metadata_blob.download_as_text())
+        splits = metadata.get("splits", [])
+
+        if not splits:
+            raise FileNotFoundError(
+                f"No splits found in dataset {processed_dataset_id}"
+            )
+
+        # Find train and test splits
+        train_split = None
+        eval_split = None
+
+        for split_info in splits:
+            split_name = split_info.get("split_name", "").lower()
+            if split_name in ["train", "training"]:
+                train_split = split_info
+            elif split_name in ["test", "validation", "eval", "evaluation"]:
+                eval_split = split_info
+
+        # If no explicit train split found, use the first split as train
+        if not train_split and splits:
+            train_split = splits[0]
+            logger.warning(
+                f"No explicit train split found for {processed_dataset_id}, using {train_split.get('split_name')}"
+            )
+
+        if not train_split:
+            raise FileNotFoundError(
+                f"No train split found in dataset {processed_dataset_id}"
+            )
+
+        # Download train dataset
         train_blob = bucket.blob(
-            f"processed_datasets/{processed_dataset_id}_train.json"
+            f"processed_datasets/{processed_dataset_id}/{train_split['split_name']}.parquet"
         )
         if not train_blob.exists():
-            raise FileNotFoundError("Training dataset not found in GCS")
-        train_data = json.loads(train_blob.download_as_text())
-        train_dataset = Dataset.from_list(train_data)
+            raise FileNotFoundError(
+                f"Train dataset file not found for {processed_dataset_id}"
+            )
 
-        # download eval dataset if exists
-        eval_blob = bucket.blob(f"processed_datasets/{processed_dataset_id}_test.json")
+        # Download as bytes and load as parquet
+        train_data_bytes = train_blob.download_as_bytes()
+
+        train_table = pq.read_table(io.BytesIO(train_data_bytes))
+        train_dataset = Dataset(train_table)
+
+        # Download eval dataset if exists
         eval_dataset = None
-        if eval_blob.exists():
-            eval_data = json.loads(eval_blob.download_as_text())
-            if eval_data:
-                eval_dataset = Dataset.from_list(eval_data)
+        if eval_split:
+            eval_blob = bucket.blob(
+                f"processed_datasets/{processed_dataset_id}/{eval_split['split_name']}.parquet"
+            )
+            if eval_blob.exists():
+                eval_data_bytes = eval_blob.download_as_bytes()
+                eval_table = pq.read_table(io.BytesIO(eval_data_bytes))
+                eval_dataset = Dataset(eval_table)
+            else:
+                logger.warning(
+                    f"Eval dataset file not found for {processed_dataset_id}, using train only"
+                )
         else:
             logger.warning(
-                f"Eval dataset not found for {processed_dataset_id}, using train only"
+                f"No eval split found for {processed_dataset_id}, using train only"
             )
 
         return train_dataset, eval_dataset
@@ -243,12 +301,9 @@ class GCSStorageStrategy(ModelStorageStrategy):
     Handles saving and loading model artifacts to/from GCS buckets. This strategy
     is used for persistent storage of trained adapters and supports both Unsloth
     and standard HuggingFace models.
-
-    Args:
-        storage_service: CloudStorageService instance for GCS operations
     """
 
-    def __init__(self, storage_service):
+    def __init__(self):
         self.storage_service: CloudStorageService = storage_service
 
     def save_model(
@@ -451,7 +506,7 @@ class StorageStrategyFactory:
             ValueError: If storage_type is not supported
         """
         if storage_type == "gcs":
-            return GCSStorageStrategy(storage_service=storage_service)
+            return GCSStorageStrategy()
         elif storage_type == "hfhub":
             return HuggingFaceHubStrategy()
         else:
@@ -461,4 +516,4 @@ class StorageStrategyFactory:
 # default model storage service instance
 data_bucket = os.environ.get("GCS_DATA_BUCKET_NAME", "gemma-dataset-dev")
 export_bucket = os.environ.get("GCS_EXPORT_BUCKET_NAME", "gemma-export-dev")
-storage_service = CloudStorageService(storage.Client(), data_bucket, export_bucket)
+storage_service = CloudStorageService(data_bucket, export_bucket)
