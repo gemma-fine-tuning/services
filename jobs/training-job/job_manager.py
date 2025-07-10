@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Optional
 from google.cloud import firestore
 from dataclasses import dataclass
 
@@ -29,7 +29,6 @@ class JobMetadata:
     adapter_path: Optional[str] = None
     wandb_url: Optional[str] = None
     error: Optional[str] = None
-    progress_info: Optional[Dict[str, Any]] = None
 
 
 class JobStateManager:
