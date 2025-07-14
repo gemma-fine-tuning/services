@@ -301,7 +301,7 @@ resource "google_cloud_run_v2_service" "inference_service" {
   provider = google-beta
 
   template {
-    gpu_zonal_redundancy_disabled = false
+    gpu_zonal_redundancy_disabled = true
     service_account = google_service_account.gemma_services.email
     scaling {
       min_instance_count = 0
