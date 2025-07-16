@@ -13,7 +13,7 @@ class DatasetUploadResponse(BaseModel):
 
 
 class FieldMappingConfig(BaseModel):
-    type: Literal["column", "template"]
+    type: Literal["column", "template", "image"]
     value: str
 
 

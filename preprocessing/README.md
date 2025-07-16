@@ -4,11 +4,11 @@ FastAPI based preprocessing service for [Gemma fine-tuning](https://github.com/g
 
 ## Architecture
 
-This service follows a simplified 5-component architecture:
+This service follows a simplified 6-component architecture:
 
 1. **DatasetHandler** - Uploads raw and processed datasets with the help of storage service
 2. **DatasetLoader** - Loads datasets from local file system or HuggingFace datasets into a `DatasetDict` object
-3. **FormatConverter** - Converts datasets to ChatML format
+3. **FormatConverter** - Converts datasets to ChatML format (automatically detects and handles vision datasets)
 4. **Storage Service** - Handles storage of datasets in Google Cloud Storage / Local File System
     1. **GCSStorageManager** - Handles storage of datasets in Google Cloud Storage
     2. **LocalStorageManager** - Handles storage of datasets in Local File System
@@ -18,7 +18,7 @@ This service follows a simplified 5-component architecture:
 
 - `GET /health` - Health check
 - `POST /upload` - Upload dataset files
-- `POST /process` - Start preprocessing job
+- `POST /process` - Start preprocessing job (supports vision datasets)
 - `GET /datasets` - List all datasets
 - `GET /datasets/{dataset_name}` - Get dataset information
 
@@ -26,6 +26,7 @@ This service follows a simplified 5-component architecture:
 
 - JSON, JSONL, CSV, Parquet and Excel files
 - HuggingFace datasets
+- **Vision datasets** with image columns (JPEG, PNG, BMP, GIF, TIFF, WebP)
 
 ## Deployment
 
@@ -94,6 +95,54 @@ gcloud run deploy preprocessing-service \
 ## API Documentation
 
 Once running, visit `http://localhost:8080/docs` for interactive API documentation.
+
+## Note on Vision Datasets
+
+- Dataset must contain at least one image column
+- Images can be in various formats:
+  - PIL Image objects
+  - Base64 encoded strings
+  - File paths
+  - HuggingFace dataset format with `bytes` field
+
+An example would be `unsloth/LaTeX_OCR`.
+
+### Vision Configuration
+
+Vision processing is automatically enabled when image field mappings are detected. Simply add image field mappings to your configuration (you can include multiple images in a single user message).
+
+```json
+{
+  "config": {
+    "vision_enabled": true,
+    "field_mappings": {
+      "user_field": {
+        "type": "template",
+        "value": "Compare these images and tell me the differences."
+      },
+      "assistant_field": {
+        "type": "column",
+        "value": "comparison"
+      },
+      "image_field_1": {
+        "type": "image",
+        "value": "image1"
+      },
+      "image_field_2": {
+        "type": "image", 
+        "value": "image2"
+      },
+      "image_field_3": {
+        "type": "image",
+        "value": "image3"
+      }
+    }
+  }
+}
+```
+
+- Images are **always added to user messages only**
+- Images are processed in the order they appear in the field_mappings
 
 ## Development
 
