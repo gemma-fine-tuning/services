@@ -72,6 +72,39 @@ resource "google_project_service" "required_apis" {
   disable_on_destroy = false
 }
 
+# Shared Service Account for both services
+resource "google_service_account" "gemma_services" {
+  account_id   = "gemma-services"
+  display_name = "Gemma Services Account"
+  description  = "Shared service account for preprocessing and training services"
+}
+
+# Grant necessary permissions
+resource "google_project_iam_member" "gemma_services_storage" {
+  project = var.project_id
+  role    = "roles/storage.admin"
+  member  = "serviceAccount:${google_service_account.gemma_services.email}"
+}
+
+resource "google_project_iam_member" "gemma_services_logging" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.gemma_services.email}"
+}
+
+resource "google_project_iam_member" "gemma_services_run" {
+  project = var.project_id
+  role    = "roles/run.admin"
+  member  = "serviceAccount:${google_service_account.gemma_services.email}"
+}
+
+resource "google_project_iam_member" "gemma_services_firestore" {
+  project = var.project_id
+  role    = "roles/datastore.user"
+  member  = "serviceAccount:${google_service_account.gemma_services.email}"
+}
+
+
 # Artifact Registry Repository (shared)
 resource "google_artifact_registry_repository" "gemma_services" {
   location      = var.region
@@ -142,32 +175,6 @@ resource "google_storage_bucket" "config_bucket" {
   }
 
   depends_on = [google_project_service.required_apis]
-}
-
-# Shared Service Account for both services
-resource "google_service_account" "gemma_services" {
-  account_id   = "gemma-services"
-  display_name = "Gemma Services Account"
-  description  = "Shared service account for preprocessing and training services"
-}
-
-# Grant necessary permissions
-resource "google_project_iam_member" "gemma_services_storage" {
-  project = var.project_id
-  role    = "roles/storage.admin"
-  member  = "serviceAccount:${google_service_account.gemma_services.email}"
-}
-
-resource "google_project_iam_member" "gemma_services_logging" {
-  project = var.project_id
-  role    = "roles/logging.logWriter"
-  member  = "serviceAccount:${google_service_account.gemma_services.email}"
-}
-
-resource "google_project_iam_member" "gemma_services_run" {
-  project = var.project_id
-  role    = "roles/run.admin"
-  member  = "serviceAccount:${google_service_account.gemma_services.email}"
 }
 
 # Preprocessing Service

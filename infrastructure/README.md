@@ -81,6 +81,13 @@ terraform apply
 - **Cloud Run Job**: Training job (GPU)
 - **IAM**: Service account and permissions
 
+## IAM Roles
+
+- `roles/run.admin`: Required for Cloud Run services
+- `roles/storage.admin`: Required for managing GCS buckets
+- `roles/logging.logWriter`: Required for logging
+- `roles/datastore.user`: Required for Firestore access
+
 ## Outputs
 
 - URLs for all deployed services
