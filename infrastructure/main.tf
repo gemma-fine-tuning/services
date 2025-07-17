@@ -4,7 +4,7 @@ terraform {
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = "~> 5.0"
+      version = "~> 6.44"
     }
   }
 }
@@ -24,13 +24,13 @@ variable "region" {
 variable "data_bucket_name" {
   description = "GCS bucket for datasets"
   type        = string
-  default     = "gemma-dataset-dev"
+  default     = "gemma-dataset-bucket"
 }
 
 variable "export_bucket_name" {
   description = "GCS bucket for model exports"
   type        = string
-  default     = "gemma-export-dev"
+  default     = "gemma-export-bucket"
 }
 
 variable "config_bucket_name" {
@@ -161,6 +161,12 @@ resource "google_project_iam_member" "gemma_services_storage" {
 resource "google_project_iam_member" "gemma_services_logging" {
   project = var.project_id
   role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.gemma_services.email}"
+}
+
+resource "google_project_iam_member" "gemma_services_run" {
+  project = var.project_id
+  role    = "roles/run.admin"
   member  = "serviceAccount:${google_service_account.gemma_services.email}"
 }
 

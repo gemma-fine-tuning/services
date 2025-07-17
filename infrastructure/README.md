@@ -29,7 +29,13 @@ gcloud config set project $GOOGLE_CLOUD_PROJECT
 
 3. **Edit variables**
 
-Values in `terraform.tfvars` are already prefilled with default values. Feel free to change them to your own. **You should at least fill in your project id.**
+Copy `terraform.tfvars.example` to `terraform.tfvars` and fill in your project details:
+
+```bash
+cp terraform.tfvars.example terraform.tfvars
+```
+
+Values in `terraform.tfvars.example` are already prefilled with default values. Feel free to change them to your own. **You should at least fill in your project id.**
 
 | Name                    | Description                           | Default            |
 | ----------------------- | ------------------------------------- | ------------------ |
