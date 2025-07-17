@@ -198,7 +198,8 @@ class DatasetHandler:
             str: The file path of the uploaded dataset
 
         Raises:
-            ValueError: If the dataset is empty or if the dataset is not in the correct format
+            ValueError: If the dataset is empty, if the dataset is not in the correct format,
+                       or if all splits are empty
         """
         if not dataset:
             raise ValueError("Dataset is empty")
@@ -211,7 +212,7 @@ class DatasetHandler:
             "dataset_name": dataset_name,
             "upload_type": "processed_upload",
             "upload_date": datetime.now().isoformat(),
-            "config": config.dict(),
+            "config": config.model_dump(),
             "dataset_id": dataset_id,
             "dataset_subset": dataset_subset,
             "dataset_source": dataset_source,
@@ -221,6 +222,10 @@ class DatasetHandler:
         base_blob_name = f"processed_datasets/{dataset_name}"
 
         for split_name, split_dataset in dataset.items():
+            if len(split_dataset) == 0:
+                logger.warning(f"Split {split_name} is empty, skipping...")
+                continue
+
             buf = io.BytesIO()
             split_dataset.to_parquet(buf)
             blob_name = f"{base_blob_name}/{split_name}.parquet"
@@ -232,6 +237,10 @@ class DatasetHandler:
                     "path": split_path,
                 }
             )
+
+        # Check if all splits were empty
+        if not metadata["splits"]:
+            raise ValueError("Cannot upload dataset: all splits are empty")
 
         metadata_path = self.storage.upload_data(
             json.dumps(metadata), f"{base_blob_name}/metadata.json"

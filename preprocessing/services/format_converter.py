@@ -2,8 +2,8 @@ import logging
 import re
 from typing import Dict, Any, List, Optional
 from datasets import DatasetDict
-from PIL import Image
 import base64
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +16,6 @@ class FormatConverter:
     ChatML format, which is a standardized format for conversational AI training data.
     It supports conversion from multiple input formats and includes validation.
 
-    For vision datasets, it supports multimodal ChatML format with image content.
-
     The ChatML format follows this structure:
     ```json
     {
@@ -25,22 +23,6 @@ class FormatConverter:
             {"role": "system", "content": "System message"},
             {"role": "user", "content": "User message"},
             {"role": "assistant", "content": "Assistant response"}
-        ]
-    }
-    ```
-
-    For vision datasets, content can be multimodal:
-    ```json
-    {
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "What's in this image?"},
-                    {"type": "image", "image": PIL_Image_object}
-                ]
-            },
-            {"role": "assistant", "content": [{"type": "text", "text": "Response"}]}
         ]
     }
     ```
@@ -69,8 +51,6 @@ class FormatConverter:
         the provided configuration. It handles field mapping, template formatting, and
         ensures the output follows the ChatML structure for all splits.
 
-        Automatically detects image fields in field_mappings and creates multimodal ChatML format.
-
         Args:
             dataset (DatasetDict): The input dataset with splits to convert, where keys are split names
                 (e.g., 'train', 'test', 'validation') and values are lists of examples
@@ -84,6 +64,24 @@ class FormatConverter:
 
         Raises:
             Exception: If there's an error during conversion
+
+        Example:
+            >>> config = {
+            ...     "field_mappings": {
+            ...         "user_field": {"type": "template", "value": "User: {question}"},
+            ...         "assistant_field": {"type": "column", "value": "answer"}
+            ...         "system_field": {"type": "template", "value": "You are a helpful assistant."}
+            ...     }
+            ... }
+            >>> dataset = DatasetDict({
+            ...     "train": Dataset.from_list([{"question": "What is ML?", "answer": "Machine Learning"}]),
+            ...     "test": Dataset.from_list([{"question": "What is AI?", "answer": "Artificial Intelligence"}])
+            ... })
+            >>> chatml_data = converter.convert_to_chatml(dataset, config)
+            >>> # Returns: {
+            ... #     "train": Dataset.from_list([{"messages": [{"role": "user", "content": "User: What is ML?"}, {"role": "assistant", "content": "Machine Learning"}]}]),
+            ... #     "test": Dataset.from_list([{"messages": [{"role": "user", "content": "User: What is AI?"}, {"role": "assistant", "content": "Artificial Intelligence"}]}]),
+            ... # }
         """
         try:
             if not dataset:
@@ -91,15 +89,11 @@ class FormatConverter:
 
             # Check if we have any image fields in the configuration
             has_image_fields = self._has_image_fields(config.get("field_mappings", {}))
-
-            if has_image_fields:
-                conversion_method = self._convert_vision_example
-            else:
-                conversion_method = self._convert_single_example
+            logger.info(f"Has image fields: {has_image_fields}")
 
             transformed_dataset = dataset.map(
-                conversion_method,
-                fn_kwargs={"config": config},
+                self._convert_single_example,
+                fn_kwargs={"config": config, "is_multimodal": has_image_fields},
                 batched=False,
                 remove_columns=dataset[next(iter(dataset))].column_names,
             )
@@ -108,13 +102,21 @@ class FormatConverter:
                 lambda x: "messages" in x and x["messages"]
             )
 
+            logger.info(f"Converted dataset splits: {list(transformed_dataset.keys())}")
+            for split_name, split_data in transformed_dataset.items():
+                logger.info(
+                    f"Converted split {split_name} has {len(split_data)} examples"
+                )
+
             return transformed_dataset
 
         except Exception as e:
             logger.error(f"Error converting to ChatML format: {str(e)}")
             raise
 
-    def _convert_single_example(self, example: Dict, config: Dict[str, Any]) -> Dict:
+    def _convert_single_example(
+        self, example: Dict, config: Dict[str, Any], is_multimodal: bool
+    ) -> Dict:
         """
         Convert a single example to ChatML format.
 
@@ -132,67 +134,44 @@ class FormatConverter:
         Returns:
             Dict: The converted example in ChatML format with messages field, or empty dict if conversion fails
         """
+        # Simplified single-example conversion using helper methods
         try:
             field_mappings = config.get("field_mappings", {})
-            messages = []
+            messages: List[Dict[str, Any]] = []
 
-            if "system_field" in field_mappings:
-                system_config = field_mappings["system_field"]
-                if system_config["type"] == "column":
-                    if system_config["value"] in example:
-                        system_message = str(example[system_config["value"]])
-                        if system_message:
-                            messages.append(
-                                {"role": "system", "content": system_message}
-                            )
-                else:  # template
-                    try:
-                        template_vars = {
-                            key: str(value) for key, value in example.items()
-                        }
-                        system_message = system_config["value"].format(**template_vars)
-                        if system_message:
-                            messages.append(
-                                {"role": "system", "content": system_message}
-                            )
-                    except (KeyError, ValueError) as e:
-                        logger.warning(
-                            f"System message template formatting failed: {e}"
-                        )
+            # System message
+            sys_msg = self._create_system_message(example, field_mappings)
+            if sys_msg:
+                messages.append(sys_msg)
 
-            user_content = self._extract_content(example, field_mappings, "user")
-            if user_content:
-                messages.append({"role": "user", "content": user_content})
-
-            assistant_content = self._extract_content(
-                example, field_mappings, "assistant"
+            # User message (text only)
+            user_msg = self._create_user_message(
+                example, field_mappings, is_multimodal=is_multimodal
             )
-            if assistant_content:
-                messages.append({"role": "assistant", "content": assistant_content})
+            if user_msg:
+                messages.append(user_msg)
 
-            # Check if we have valid user and assistant messages
-            has_user = any(msg["role"] == "user" for msg in messages)
-            has_assistant = any(msg["role"] == "assistant" for msg in messages)
+            # Assistant message
+            assistant_msg = self._create_assistant_message(example, field_mappings)
+            if assistant_msg:
+                messages.append(assistant_msg)
 
-            if has_user and has_assistant:
+            # Validate
+            if self._validate_messages(messages):
                 return {"messages": messages}
-            else:
-                # Return empty dict for failed conversions to work with map()
-                return {}
-
+            return {}
         except Exception as e:
-            logger.warning(f"Failed to convert example: {e}")
-            # Return empty dict for failed conversions to work with map()
+            logger.warning(f"Failed to convert single example: {e}")
             return {}
 
-    def _extract_content(
+    def _extract_text_content(
         self,
         example: Dict,
         field_mappings: Dict,
         role: str,
     ) -> str:
         """
-        Extract and format content for a specific role from the example.
+        Extract and format text content for a specific role from the example.
 
         This method extracts content from the input example based on field mappings
         and applies template formatting if specified. It also normalizes whitespace
@@ -200,7 +179,7 @@ class FormatConverter:
 
         Args:
             example (Dict): The input example
-            field_mappings (Dict): Maps field names to field mapping configs
+            field_mappings (Dict): Maps roles to field mapping configs
             role (str): The role to extract content for ('user' or 'assistant')
 
         Returns:
@@ -211,15 +190,10 @@ class FormatConverter:
             >>> field_mappings = {
             ...     "user_field": {"type": "column", "value": "question"}
             ... }
-            >>> content = converter._extract_content(example, field_mappings, "user")
+            >>> content = converter._extract_text_content(example, field_mappings, "user")
         """
-        # Find field mapping for this role
         field_config = field_mappings.get(f"{role}_field")
         if not field_config:
-            return ""
-
-        # Skip image fields in text extraction
-        if field_config.get("type") == "image":
             return ""
 
         if field_config["type"] == "column":
@@ -239,21 +213,21 @@ class FormatConverter:
 
         return str(content)
 
-    def _extract_vision_content(
+    def _extract_multimodal_content(
         self,
         example: Dict,
-        config: Dict,
+        field_mappings: Dict,
         role: str,
     ) -> List[Dict[str, Any]]:
         """
-        Extract and format multimodal content for a specific role from the example.
+        Extract and format multimodal content (text + images) for a specific role.
 
         This method extracts both text and image content from the input example
         and formats it for vision ChatML format. Images are only added to user messages.
 
         Args:
             example (Dict): The input example
-            config (Dict): Configuration including field_mappings
+            field_mappings (Dict): Maps roles to field mapping configs
             role (str): The role to extract content for ('user' or 'assistant')
 
         Returns:
@@ -261,30 +235,27 @@ class FormatConverter:
 
         Example:
             >>> example = {"question": "What is in this image?", "image": PIL_Image}
-            >>> config = {
-            ...     "field_mappings": {
-            ...         "user_field": {"type": "column", "value": "question"},
-            ...         "image_field": {"type": "image", "value": "image"}
-            ...     }
+            >>> field_mappings = {
+            ...     "user_field": {"type": "column", "value": "question"},
+            ...     "image_field": {"type": "image", "value": "image"}
             ... }
-            >>> content = converter._extract_vision_content(example, config, "user")
+            >>> content = converter._extract_multimodal_content(example, field_mappings, "user")
             >>> [
             ...     {"type": "text", "text": "What is in this image?"},
             ...     {"type": "image", "image": PIL_Image_object}
             ... ]
         """
         content_items = []
-        field_mappings = config.get("field_mappings", {})
 
-        # Extract text content
-        text_content = self._extract_content(example, field_mappings, role)
+        # Extract text content using the existing method
+        text_content = self._extract_text_content(example, field_mappings, role)
         if text_content:
             content_items.append({"type": "text", "text": text_content})
 
         # Extract image content - ONLY for user messages
         if role == "user":
             # Find all image field mappings
-            for field_name, field_config in field_mappings.items():
+            for _, field_config in field_mappings.items():
                 if field_config.get("type") == "image":
                     image_column = field_config.get("value")
                     if image_column and image_column in example:
@@ -295,7 +266,12 @@ class FormatConverter:
                                 content_items.append(
                                     {"type": "image", "image": processed_image}
                                 )
+                            else:
+                                logger.warning(
+                                    f"Failed to process image field '{image_column}' for {role}"
+                                )
 
+        logger.debug(f"Final content items for {role}: {len(content_items)} items")
         return content_items
 
     def _process_image_field(self, image_data: Any) -> Optional[Any]:
@@ -341,88 +317,13 @@ class FormatConverter:
                     image = Image.open(image_data)
                     return image.convert("RGB")
                 except Exception:
+                    logger.warning(f"Failed to open image from path: {image_data}")
                     pass
 
         except Exception as e:
             logger.error(f"Error processing image field: {str(e)}")
 
         return None
-
-    def _convert_vision_example(self, example: Dict, config: Dict[str, Any]) -> Dict:
-        """
-        Convert a single example to vision ChatML format.
-
-        This method converts one example from the input format to vision ChatML format,
-        supporting multimodal content with both text and images.
-
-        Args:
-            example (Dict): The input example to convert
-            config (Dict[str, Any]): Configuration for the conversion
-
-        Returns:
-            Dict: The converted example in vision ChatML format with messages field
-        """
-        try:
-            field_mappings = config.get("field_mappings", {})
-            messages = []
-
-            # Handle system message (text only)
-            if "system_field" in field_mappings:
-                system_config = field_mappings["system_field"]
-                if system_config["type"] == "column":
-                    if system_config["value"] in example:
-                        system_message = str(example[system_config["value"]])
-                        if system_message:
-                            messages.append(
-                                {
-                                    "role": "system",
-                                    "content": [
-                                        {"type": "text", "text": system_message}
-                                    ],
-                                }
-                            )
-                else:  # template
-                    try:
-                        template_vars = {
-                            key: str(value) for key, value in example.items()
-                        }
-                        system_message = system_config["value"].format(**template_vars)
-                        if system_message:
-                            messages.append(
-                                {
-                                    "role": "system",
-                                    "content": [
-                                        {"type": "text", "text": system_message}
-                                    ],
-                                }
-                            )
-                    except (KeyError, ValueError) as e:
-                        logger.warning(
-                            f"System message template formatting failed: {e}"
-                        )
-
-            # Handle user message (potentially multimodal)
-            user_content = self._extract_vision_content(example, config, "user")
-            if user_content:
-                messages.append({"role": "user", "content": user_content})
-
-            # Handle assistant message (always text only)
-            assistant_content = self._extract_content(example, config, "assistant")
-            if assistant_content:
-                messages.append({"role": "assistant", "content": assistant_content})
-
-            # Check if we have valid user and assistant messages
-            has_user = any(msg["role"] == "user" for msg in messages)
-            has_assistant = any(msg["role"] == "assistant" for msg in messages)
-
-            if has_user and has_assistant:
-                return {"messages": messages}
-            else:
-                return {}
-
-        except Exception as e:
-            logger.warning(f"Failed to convert vision example: {e}")
-            return {}
 
     def _is_base64_image(self, value: str) -> bool:
         """
@@ -463,3 +364,102 @@ class FormatConverter:
             field_config.get("type") == "image"
             for field_config in field_mappings.values()
         )
+
+    def _create_system_message(
+        self, example: Dict, field_mappings: Dict
+    ) -> Optional[Dict]:
+        """
+        Create a system message from the example data.
+
+        Args:
+            example (Dict): The input example
+            field_mappings (Dict): Field mappings configuration
+
+        Returns:
+            Optional[Dict]: System message dict or None if no system field
+        """
+        if "system_field" not in field_mappings:
+            return None
+
+        system_config = field_mappings["system_field"]
+        system_message = ""
+
+        if system_config["type"] == "column":
+            if system_config["value"] in example:
+                system_message = str(example[system_config["value"]])
+        else:  # template
+            try:
+                template_vars = {key: str(value) for key, value in example.items()}
+                system_message = system_config["value"].format(**template_vars)
+            except (KeyError, ValueError) as e:
+                logger.warning(f"System message template formatting failed: {e}")
+                return None
+
+        if system_message:
+            return {
+                "role": "system",
+                "content": [{"type": "text", "text": system_message}],
+            }
+        return None
+
+    def _create_user_message(
+        self, example: Dict, field_mappings: Dict, is_multimodal: bool = False
+    ) -> Optional[Dict]:
+        """
+        Create a user message from the example data.
+
+        Args:
+            example (Dict): The input example
+            field_mappings (Dict): Field mappings configuration
+            is_multimodal (bool): Whether to include image content
+
+        Returns:
+            Optional[Dict]: User message dict or None if no content
+        """
+        user_content = (
+            self._extract_multimodal_content(example, field_mappings, "user")
+            if is_multimodal
+            else self._extract_text_content(example, field_mappings, "user")
+        )
+
+        if user_content:
+            return {"role": "user", "content": user_content}
+
+        return None
+
+    def _create_assistant_message(
+        self, example: Dict, field_mappings: Dict
+    ) -> Optional[Dict]:
+        """
+        Create an assistant message from the example data.
+
+        Args:
+            example (Dict): The input example
+            field_mappings (Dict): Field mappings configuration
+
+        Returns:
+            Optional[Dict]: Assistant message dict or None if no content
+        """
+        assistant_content = self._extract_text_content(
+            example, field_mappings, "assistant"
+        )
+        if assistant_content:
+            return {
+                "role": "assistant",
+                "content": [{"type": "text", "text": assistant_content}],
+            }
+        return None
+
+    def _validate_messages(self, messages: List[Dict]) -> bool:
+        """
+        Validate that we have the required messages for a valid conversation.
+
+        Args:
+            messages (List[Dict]): List of message dictionaries
+
+        Returns:
+            bool: True if messages are valid for training
+        """
+        has_user = any(msg["role"] == "user" for msg in messages)
+        has_assistant = any(msg["role"] == "assistant" for msg in messages)
+        return has_user and has_assistant
