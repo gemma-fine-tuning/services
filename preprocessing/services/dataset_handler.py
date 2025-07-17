@@ -207,6 +207,12 @@ class DatasetHandler:
         if not dataset_name:
             raise ValueError("Dataset name is required")
 
+        # Automatically determine modality: 'vision' if any image field mappings, else 'text'
+        modality = (
+            "vision"
+            if any(fm.type == "image" for fm in config.field_mappings.values())
+            else "text"
+        )
         metadata = {
             "splits": [],
             "dataset_name": dataset_name,
@@ -216,6 +222,7 @@ class DatasetHandler:
             "dataset_id": dataset_id,
             "dataset_subset": dataset_subset,
             "dataset_source": dataset_source,
+            "modality": modality,
             "created_at": datetime.now().isoformat(),
         }
 

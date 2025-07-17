@@ -10,8 +10,8 @@ This service follows a simplified 6-component architecture:
 2. **DatasetLoader** - Loads datasets from local file system or HuggingFace datasets into a `DatasetDict` object
 3. **FormatConverter** - Converts datasets to ChatML format (automatically detects and handles vision datasets)
 4. **Storage Service** - Handles storage of datasets in Google Cloud Storage / Local File System
-    1. **GCSStorageManager** - Handles storage of datasets in Google Cloud Storage
-    2. **LocalStorageManager** - Handles storage of datasets in Local File System
+   1. **GCSStorageManager** - Handles storage of datasets in Google Cloud Storage
+   2. **LocalStorageManager** - Handles storage of datasets in Local File System
 5. **DatasetService** - Utilizes the above components to handle dataset upload, processing and storage. This is the main entry point for the API.
 
 ## API Endpoints
@@ -27,6 +27,8 @@ This service follows a simplified 6-component architecture:
 - JSON, JSONL, CSV, Parquet and Excel files
 - HuggingFace datasets
 - **Vision datasets** with image columns (JPEG, PNG, BMP, GIF, TIFF, WebP)
+
+> NOTE: Currently uploading custom vision datasets is not supported, but you can use existing HuggingFace multimodal datasets.
 
 ## Deployment
 
@@ -129,7 +131,7 @@ Vision processing is automatically enabled when image field mappings are detecte
         "value": "image1"
       },
       "image_field_2": {
-        "type": "image", 
+        "type": "image",
         "value": "image2"
       },
       "image_field_3": {

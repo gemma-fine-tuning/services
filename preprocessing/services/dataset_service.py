@@ -289,6 +289,7 @@ class DatasetService:
                             split.get("split_name")
                             for split in metadata.get("splits", [])
                         ],
+                        modality=metadata.get("modality", "text"),
                     )
 
                     datasets_info.append(dataset_info)
@@ -348,6 +349,7 @@ class DatasetService:
                 dataset_id=metadata.get("dataset_id"),
                 created_at=metadata.get("upload_date"),
                 splits=splits_with_samples,
+                modality=metadata.get("modality", "text"),
             )
 
         except Exception as e:

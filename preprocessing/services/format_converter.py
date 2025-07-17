@@ -87,13 +87,30 @@ class FormatConverter:
             if not dataset:
                 raise ValueError("Dataset is empty")
 
+            # Validate field mappings refer to real columns
+            field_mappings = config.get("field_mappings", {})
+            first_split = dataset[next(iter(dataset))]
+            available_columns = set(first_split.column_names)
+
+            for field_key, field_config in field_mappings.items():
+                if field_config.get("type") in ("column", "image"):
+                    column_name = field_config.get("value")
+                    if column_name not in available_columns:
+                        raise ValueError(
+                            f"Field mapping '{field_key}' refers to column '{column_name}' "
+                            f"which does not exist in dataset. Available columns: {sorted(available_columns)}"
+                        )
+
             # Check if we have any image fields in the configuration
-            has_image_fields = self._has_image_fields(config.get("field_mappings", {}))
+            has_image_fields = self._has_image_fields(field_mappings)
             logger.info(f"Has image fields: {has_image_fields}")
 
             transformed_dataset = dataset.map(
                 self._convert_single_example,
-                fn_kwargs={"config": config, "is_multimodal": has_image_fields},
+                fn_kwargs={
+                    "field_mappings": field_mappings,
+                    "is_multimodal": has_image_fields,
+                },
                 batched=False,
                 remove_columns=dataset[next(iter(dataset))].column_names,
             )
@@ -115,7 +132,10 @@ class FormatConverter:
             raise
 
     def _convert_single_example(
-        self, example: Dict, config: Dict[str, Any], is_multimodal: bool
+        self,
+        example: Dict,
+        field_mappings: Dict[str, Dict[str, Any]],
+        is_multimodal: bool = False,
     ) -> Dict:
         """
         Convert a single example to ChatML format.
@@ -126,17 +146,15 @@ class FormatConverter:
 
         Args:
             example (Dict): The input example to convert
-            config (Dict[str, Any]): Configuration for the conversion, including:
-                - field_mappings (Dict): Maps input fields to ChatML roles with type and value:
-                    - type: "column" or "template"
-                    - value: column name or template string with {column} references
+            field_mappings (Dict): Maps input fields to ChatML roles with type and value:
+                - type: "column" or "template"
+                - value: column name or template string with {column} references
 
         Returns:
             Dict: The converted example in ChatML format with messages field, or empty dict if conversion fails
         """
         # Simplified single-example conversion using helper methods
         try:
-            field_mappings = config.get("field_mappings", {})
             messages: List[Dict[str, Any]] = []
 
             # System message
