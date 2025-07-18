@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Literal
+from typing import Any, Dict, List, Literal
 
 
 class InferenceRequest(BaseModel):
@@ -19,8 +19,8 @@ class BatchInferenceRequest(BaseModel):
     hf_token: str
     storage_type: Literal["gcs", "hfhub"]
     job_id_or_repo_id: str
-    # English lesson corner: Note that this is "prompts" not "prompt"!
-    prompts: list[str]
+    # A list of conversations, where each conversation is a list of messages
+    messages: List[List[Dict[str, Any]]]
 
 
 class BatchInferenceResponse(BaseModel):

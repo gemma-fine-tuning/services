@@ -54,7 +54,11 @@ Batch inference for multiple prompts.
   "hf_token": "hf_...",
   "storage_type": "gcs" | "hfhub",
   "job_id_or_repo_id": "training_abc123_gemma-2b" | "user/repo",
-  "prompts": ["Prompt 1", "Prompt 2"]
+  "messages": [
+    [
+      {"role": "user", "content": "What is the capital of France?"}
+    ]
+  ]
 }
 ```
 

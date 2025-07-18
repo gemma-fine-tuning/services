@@ -97,6 +97,15 @@ class HuggingFaceTrainingService(BaseTrainingService):
         self.SFTConfig = SFTConfig
         self.get_peft_model = get_peft_model
 
+        self.supported_models = [
+            "google/gemma-3-1b-it",
+            "google/gemma-3-4b-it",
+            "google/gemma-3-12b-it",
+            # "google/gemma-3-27b-it",
+            "google/gemma-3n-E2B-it",
+            "google/gemma-3n-E4B-it",
+        ]
+
         # Determine dtype based on GPU capability
         if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
             self.torch_dtype = torch.bfloat16
@@ -120,26 +129,37 @@ class HuggingFaceTrainingService(BaseTrainingService):
         try:
             processed_dataset_id = req.processed_dataset_id
             model_cfg = req.training_config.model_dump()
+            modality = model_cfg.get("modality", "text")
             base_model_id = model_cfg.get("base_model_id", "google/gemma-3-1b-it")
-            # Use the job_id from the job_tracker
             job_id = job_tracker.job_id
 
             logging.info(
-                f"Starting HuggingFace training job {job_id} with model {base_model_id}"
+                f"Starting HuggingFace training job {job_id} with model {base_model_id} (modality={modality})"
             )
             logging.info(f"Training config: {model_cfg}")
             logging.info(f"Export type: {req.export}")
 
-            # Call core training logic with job tracker
-            result = self._run_training_core(
-                processed_dataset_id,
-                model_cfg,
-                job_id,
-                req.export,
-                job_tracker,
-                req.hf_repo_id,
-                req.wandb_config,
-            )
+            # Route to appropriate core method based on modality
+            if modality == "vision":
+                result = self._run_training_hf_vision_core(
+                    processed_dataset_id,
+                    model_cfg,
+                    job_id,
+                    req.export,
+                    job_tracker,
+                    req.hf_repo_id,
+                    req.wandb_config,
+                )
+            else:
+                result = self._run_training_core(
+                    processed_dataset_id,
+                    model_cfg,
+                    job_id,
+                    req.export,
+                    job_tracker,
+                    req.hf_repo_id,
+                    req.wandb_config,
+                )
 
             logging.info(f"Training completed successfully for job {job_id}")
             return {
@@ -241,7 +261,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
         # Use storage strategy to save model
         try:
             storage_strategy = StorageStrategyFactory.create_strategy(export)
-            artifact = storage_strategy.save_model(
+            _ = storage_strategy.save_model(
                 model,
                 tokenizer,
                 f"/tmp/{job_id}_adapter",
@@ -256,11 +276,205 @@ class HuggingFaceTrainingService(BaseTrainingService):
             logging.error(f"Failed to save model: {str(e)}", exc_info=True)
             raise e
 
-        # 7. Cleanup
-        storage_strategy.cleanup(artifact)
-        del model, trainer
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+    def _run_training_hf_vision_core(
+        self,
+        processed_dataset_id: str,
+        model_config: Dict[str, Any],
+        job_id: str,
+        export: str,
+        job_tracker: JobTracker,
+        hf_repo_id: Optional[str] = None,
+        wandb_config: Optional[WandbConfig] = None,
+    ) -> Dict[str, Any]:
+        """
+        Core training logic for HuggingFace vision fine-tuning.
+        Uses pre-processed datasets from our preprocessing pipeline, similar to text training.
+        Source: https://ai.google.dev/gemma/docs/core/huggingface_vision_finetune_qlora
+        https://huggingface.co/docs/trl/en/training_vlm_sft
+        """
+        from transformers import AutoProcessor
+        from PIL import Image
+
+        job_tracker.preparing()
+
+        # 1. Download processed dataset (same as text training)
+        train_dataset, eval_dataset = storage_service.download_processed_dataset(
+            processed_dataset_id
+        )
+
+        # 2. Setup model and processor for vision
+        base_model_id = model_config.get("base_model_id", "google/gemma-3-4b-it")
+
+        if base_model_id == "google/gemma-3-1b-it":
+            raise ValueError(
+                "Gemma 3.1B does not support vision fine-tuning. Use Gemma 3.4B or larger."
+            )
+
+        model_kwargs = {
+            "torch_dtype": self.torch_dtype,
+            "device_map": "auto",
+            "attn_implementation": "eager",
+        }
+
+        # Add quantization for QLoRA
+        if model_config.get("method", "LoRA") == "QLoRA":
+            model_kwargs["quantization_config"] = self.BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=self.torch_dtype,
+            )
+
+        processor = AutoProcessor.from_pretrained(base_model_id, trust_remote_code=True)
+        processor.tokenizer.padding_side = "right"
+
+        model = self.AutoModelForImageTextToText.from_pretrained(
+            base_model_id, **model_kwargs
+        )
+
+        # 3. Define collate function for vision training (handles pre-processed format)
+        def vision_collate_fn(examples):
+            """Collate function for vision datasets that are already in ChatML format with images."""
+            texts = [
+                processor.apply_chat_template(
+                    example["messages"], tokenize=False, add_generation_prompt=False
+                ).strip()
+                for example in examples
+            ]
+
+            # Extract images from pre-processed ChatML messages
+            def extract_images_from_messages(messages):
+                images = []
+                for msg in messages:
+                    content = msg.get("content", [])
+                    if isinstance(content, list):
+                        for item in content:
+                            if isinstance(item, dict) and item.get("type") == "image":
+                                img_data = item.get("image")
+                                if img_data:
+                                    # Handle PIL Image objects
+                                    if isinstance(img_data, Image.Image):
+                                        images.append(img_data.convert("RGB"))
+                                    # Handle other image formats if needed
+                                    elif hasattr(img_data, "convert"):
+                                        images.append(img_data.convert("RGB"))
+                return images
+
+            images = [
+                extract_images_from_messages(example["messages"])
+                for example in examples
+            ]
+
+            # Tokenize texts and process images
+            batch = processor(
+                text=texts, images=images, return_tensors="pt", padding=True
+            )
+
+            # Setup labels (mask padding and special tokens)
+            labels = batch["input_ids"].clone()
+
+            # Mask image tokens if they exist
+            try:
+                # Mask image tokens
+                image_token_id = [
+                    processor.tokenizer.convert_tokens_to_ids(
+                        processor.tokenizer.special_tokens_map["boi_token"]
+                    )
+                ]
+                labels[labels == image_token_id] = -100
+            except KeyError:
+                logging.warning(
+                    "Trying to run vision training but no image token found"
+                )
+                pass  # Skip if no image token
+
+            # Mask other tokens not used in loss computation
+            labels[labels == processor.tokenizer.pad_token_id] = -100
+            labels[labels == 262144] = -100
+
+            batch["labels"] = labels
+            return batch
+
+        # 4. Setup PEFT with LoRA if not full fine-tuning
+        if model_config.get("method", "LoRA") != "Full":
+            model = self._setup_peft_with_lora(model, model_config)
+            logging.info(
+                f"PEFT model trainable parameters: {model.print_trainable_parameters()}"
+            )
+        else:
+            logging.info(
+                "Full fine-tuning selected for vision model. This will be slow and might result in GPU OOM"
+            )
+
+        # 5. Setup WandB and training args
+        report_to, wandb_url = self._setup_wandb(wandb_config, job_id)
+
+        training_args = self.SFTConfig(
+            output_dir=f"/tmp/{job_id}",
+            per_device_train_batch_size=model_config.get("batch_size", 1),
+            gradient_accumulation_steps=model_config.get(
+                "gradient_accumulation_steps", 4
+            ),
+            gradient_checkpointing=True,
+            gradient_checkpointing_kwargs={"use_reentrant": False},
+            remove_unused_columns=False,
+            dataset_kwargs={"skip_prepare_dataset": True},  # important for collator
+            warmup_steps=5,
+            num_train_epochs=model_config.get("epochs", 3),
+            max_steps=model_config.get("max_steps", -1),
+            learning_rate=model_config.get("learning_rate", 2e-4),
+            fp16=self.torch_dtype == torch.float16,
+            bf16=self.torch_dtype == torch.bfloat16,
+            optim="adamw_torch_fused",
+            lr_scheduler_type="linear",
+            weight_decay=0.01,
+            save_strategy="epoch",
+            logging_steps=10,
+            report_to=report_to,
+            dataset_text_field="",  # need a dummy field for collator
+        )
+
+        training_args.remove_unused_columns = False  # important for collator
+
+        # 6. Create trainer
+        trainer = self.SFTTrainer(
+            model=model,
+            args=training_args,
+            data_collator=vision_collate_fn,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            processing_class=processor.tokenizer,
+        )
+
+        # 7. Train
+        job_tracker.training(wandb_url)
+        trainer.train()
+
+        # 8. Save model
+        try:
+            storage_strategy = StorageStrategyFactory.create_strategy(export)
+            artifact = storage_strategy.save_model(
+                model,
+                processor.tokenizer,
+                f"/tmp/{job_id}_hf_vision",
+                {
+                    "job_id": job_id,
+                    "base_model_id": base_model_id,
+                    "use_unsloth": False,
+                    "modality": "vision",
+                    "hf_repo_id": hf_repo_id,
+                },
+            )
+
+            # 9. Cleanup
+            storage_strategy.cleanup(artifact)
+            del model, trainer
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        except Exception as e:
+            logging.error(f"Failed to save vision model: {str(e)}", exc_info=True)
+            raise e
 
         job_tracker.completed(artifact.remote_path, artifact.base_model_id)
 
@@ -284,19 +498,10 @@ class HuggingFaceTrainingService(BaseTrainingService):
         Returns:
             tuple: (model, tokenizer) - the initialized model and tokenizer
         """
-        # Check supported models
-        supported_models = [
-            "google/gemma-3-1b-it",
-            "google/gemma-3-4b-it",
-            "google/gemma-3-12b-it",
-            # "google/gemma-3-27b-it",
-            "google/gemma-3n-E2B-it",
-            "google/gemma-3n-E4B-it",
-        ]
 
-        if base_model_id not in supported_models:
+        if base_model_id not in self.supported_models:
             raise ValueError(
-                f"Unsupported model {base_model_id}. Supported models are: {', '.join(supported_models)}"
+                f"Unsupported model {base_model_id}. Supported models are: {', '.join(self.supported_models)}"
             )
 
         model_kwargs = {
@@ -347,15 +552,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
             lora_dropout=model_config.get("lora_dropout", 0.05),
             r=model_config.get("lora_rank", 16),
             bias="none",
-            target_modules=[
-                "q_proj",
-                "k_proj",
-                "v_proj",
-                "o_proj",
-                "gate_proj",
-                "up_proj",
-                "down_proj",
-            ],
+            target_modules="all-linear",
             task_type="CAUSAL_LM",
             modules_to_save=["lm_head", "embed_tokens"],
         )
@@ -455,25 +652,36 @@ class UnslothTrainingService(BaseTrainingService):
 
     def __init__(self) -> None:
         # Import Unsloth libraries only when this service is instantiated
-        from unsloth import FastModel
+        from unsloth import FastModel, FastVisionModel
         from unsloth.chat_templates import (
             get_chat_template,
             standardize_data_formats,
             train_on_responses_only,
         )
+        from unsloth.trainer import UnslothVisionDataCollator
         from trl import SFTTrainer, SFTConfig
 
         # Store imports as instance variables
         self.FastModel = FastModel
+        self.FastVisionModel = FastVisionModel
         self.get_chat_template = get_chat_template
         self.standardize_data_formats = standardize_data_formats
         self.train_on_responses_only = train_on_responses_only
+        self.UnslothVisionDataCollator = UnslothVisionDataCollator
         self.SFTTrainer = SFTTrainer
         self.SFTConfig = SFTConfig
 
         # Available 4-bit models for frontend selection
         self.fourbit_models = [
             "unsloth/gemma-3-1b-it-unsloth-bnb-4bit",
+            "unsloth/gemma-3-4b-it-unsloth-bnb-4bit",
+            "unsloth/gemma-3-12b-it-unsloth-bnb-4bit",
+            # "unsloth/gemma-3-27b-it-unsloth-bnb-4bit",
+            "unsloth/gemma-3n-E4B-it-unsloth-bnb-4bit",
+            "unsloth/gemma-3n-E2B-it-unsloth-bnb-4bit",
+        ]
+
+        self.fourbit_vision_models = [
             "unsloth/gemma-3-4b-it-unsloth-bnb-4bit",
             "unsloth/gemma-3-12b-it-unsloth-bnb-4bit",
             # "unsloth/gemma-3-27b-it-unsloth-bnb-4bit",
@@ -514,16 +722,27 @@ class UnslothTrainingService(BaseTrainingService):
             logging.info(f"Training config: {model_cfg}")
             logging.info(f"Export type: {req.export}")
 
-            # Call core training logic with job tracker
-            result = self._run_training_core(
-                processed_dataset_id,
-                model_cfg,
-                job_id,
-                req.export,
-                job_tracker,
-                req.hf_repo_id,
-                req.wandb_config,
-            )
+            # Call core training logic with job tracker based on modality
+            if model_cfg.get("modality", "text") == "vision":
+                result = self._run_training_vision_core(
+                    processed_dataset_id,
+                    model_cfg,
+                    job_id,
+                    req.export,
+                    job_tracker,
+                    req.hf_repo_id,
+                    req.wandb_config,
+                )
+            else:
+                result = self._run_training_text_core(
+                    processed_dataset_id,
+                    model_cfg,
+                    job_id,
+                    req.export,
+                    job_tracker,
+                    req.hf_repo_id,
+                    req.wandb_config,
+                )
 
             logging.info(f"Unsloth training completed successfully for job {job_id}")
             return {
@@ -535,7 +754,7 @@ class UnslothTrainingService(BaseTrainingService):
             logging.error(f"Unsloth training failed: {str(e)}", exc_info=True)
             raise e
 
-    def _run_training_core(
+    def _run_training_text_core(
         self,
         processed_dataset_id: str,
         model_config: Dict[str, Any],
@@ -546,21 +765,7 @@ class UnslothTrainingService(BaseTrainingService):
         wandb_config: Optional[WandbConfig] = None,
     ) -> Dict[str, Any]:
         """
-        Core training logic for Unsloth models.
-        Handles dataset download, model/tokenizer setup, training, and export.
-        Updates job status via job_tracker if provided.
-
-        Args:
-            processed_dataset_id: ID of the processed dataset to train on
-            model_config: Model configuration parameters
-            job_id: Unique identifier for the training job
-            export: Export type (e.g., to GCS or HuggingFace Hub)
-            hf_repo_id: Optional HuggingFace repository ID for model saving
-            wandb_config: Optional WandB configuration for experiment tracking
-            job_tracker: Optional JobTracker instance for granular status updates
-
-        Returns:
-            dict: Contains `adapter_path` and `base_model_id` of the trained model
+        Core training logic for Unsloth text models.
         """
         job_tracker.preparing()
 
@@ -588,12 +793,12 @@ class UnslothTrainingService(BaseTrainingService):
         # 4. Setup WandB and get URL
         report_to, wandb_url = self._setup_wandb(wandb_config, job_id)
 
-        # 4.5. Setup training args
+        # 5. Setup training args
         training_args = self._setup_unsloth_training_args(
             model_config, job_id, report_to
         )
 
-        # 5. Train with Unsloth
+        # 6. Train with Unsloth
         torch.cuda.empty_cache()
         trainer = self.SFTTrainer(
             model=model,
@@ -603,7 +808,7 @@ class UnslothTrainingService(BaseTrainingService):
             args=training_args,
         )
 
-        # Apply response-only training
+        # Apply response-only training for text models
         trainer = self.train_on_responses_only(
             trainer,
             instruction_part="<start_of_turn>user\n",
@@ -646,11 +851,98 @@ class UnslothTrainingService(BaseTrainingService):
             "base_model_id": artifact.base_model_id,
         }
 
+    def _run_training_vision_core(
+        self,
+        processed_dataset_id: str,
+        model_config: Dict[str, Any],
+        job_id: str,
+        export: str,
+        job_tracker: JobTracker,
+        hf_repo_id: Optional[str] = None,
+        wandb_config: Optional[WandbConfig] = None,
+    ) -> Dict[str, Any]:
+        """
+        Core training logic for Unsloth vision models.
+        NOTE: For now we don't have preprocess_vision_dataset unlike text I cannot find a source indicating that this is needed
+        """
+        job_tracker.preparing()
+
+        # 1. Download processed dataset
+        train_dataset, eval_dataset = storage_service.download_processed_dataset(
+            processed_dataset_id
+        )
+
+        # 2. Setup vision model and processor with Unsloth
+        model, processor = self._setup_unsloth_vision_model(
+            model_config.get("base_model_id", "unsloth/gemma-3-4b-it-unsloth-bnb-4bit"),
+            model_config,
+        )
+
+        # 3. Setup WandB and get URL
+        report_to, wandb_url = self._setup_wandb(wandb_config, job_id)
+
+        # 4. Setup training args for vision
+        training_args = self._setup_unsloth_vision_training_args(
+            model_config, job_id, report_to
+        )
+
+        # 5. Train with Unsloth Vision
+        torch.cuda.empty_cache()
+
+        # Enable training mode for vision model
+        self.FastVisionModel.for_training(model)
+
+        # For vision training, use UnslothVisionDataCollator
+        trainer = self.SFTTrainer(
+            model=model,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            processing_class=processor.tokenizer,
+            data_collator=self.UnslothVisionDataCollator(model, processor),
+            args=training_args,
+        )
+
+        # Progress tracking: start actual training with WandB URL
+        job_tracker.training(wandb_url)
+
+        trainer.train()
+
+        # Use storage strategy to save model
+        try:
+            storage_strategy = StorageStrategyFactory.create_strategy(export)
+            artifact = storage_strategy.save_model(
+                model,
+                processor,
+                f"/tmp/{job_id}_adapter",
+                {
+                    "job_id": job_id,
+                    "base_model_id": model_config.get("base_model_id"),
+                    "use_unsloth": True,
+                    "hf_repo_id": hf_repo_id,
+                },
+            )
+        except Exception as e:
+            logging.error(f"Failed to save model: {str(e)}", exc_info=True)
+            raise e
+
+        # 6. Cleanup
+        storage_strategy.cleanup(artifact)
+        del model, trainer
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        job_tracker.completed(artifact.remote_path, artifact.base_model_id)
+
+        return {
+            "adapter_path": artifact.remote_path,
+            "base_model_id": artifact.base_model_id,
+        }
+
     def _setup_unsloth_model(
         self, base_model_id: str, model_config: Dict[str, Any]
     ) -> Tuple[Any, Any]:
         """
-        Setup Unsloth model and tokenizer for training or inference.
+        Setup Unsloth model and tokenizer for text training.
         Applies quantization and chat template configuration.
 
         Args:
@@ -667,11 +959,10 @@ class UnslothTrainingService(BaseTrainingService):
             )
 
         # Load base model with Unsloth
-        # NOTE: Since we used 4 bit bnb for HF QLoRA training we keep it consistent here
         model, tokenizer = self.FastModel.from_pretrained(
             model_name=base_model_id,
             max_seq_length=model_config.get("max_seq_length", 2048),
-            load_in_4bit=True,  # This is quantized by default
+            load_in_4bit=True,
             load_in_8bit=False,
             full_finetuning=True
             if model_config.get("method", "LoRA") == "Full"
@@ -682,22 +973,19 @@ class UnslothTrainingService(BaseTrainingService):
             # Apply PEFT with Unsloth
             model = self.FastModel.get_peft_model(
                 model,
-                # finetune_vision_layers=False,  # turn off since we're just doing text right now
-                # finetune_language_layers=True,  # optionally on or off
-                # finetune_attention_modules=False,  # Attention good for GRPO and improves training efficiency
-                # finetune_mlp_modules=True,  # should always be on according to docs
-                target_modules=[
-                    "q_proj",
-                    "k_proj",
-                    "v_proj",
-                    "o_proj",
-                    "gate_proj",
-                    "up_proj",
-                    "down_proj",
-                ],
-                r=model_config.get("lora_rank", 8),
-                lora_alpha=model_config.get("lora_alpha", 8),
-                lora_dropout=model_config.get("lora_dropout", 0.0),
+                # target_modules=[
+                #     "q_proj",
+                #     "k_proj",
+                #     "v_proj",
+                #     "o_proj",
+                #     "gate_proj",
+                #     "up_proj",
+                #     "down_proj",
+                # ],
+                target_modules="all-linear",
+                r=model_config.get("lora_rank", 16),
+                lora_alpha=model_config.get("lora_alpha", 16),
+                lora_dropout=model_config.get("lora_dropout", 0.05),
                 bias="none",
                 random_state=3407,
             )
@@ -714,10 +1002,63 @@ class UnslothTrainingService(BaseTrainingService):
 
         return model, tokenizer
 
+    def _setup_unsloth_vision_model(
+        self, base_model_id: str, model_config: Dict[str, Any]
+    ) -> Tuple[Any, Any]:
+        """
+        Setup Unsloth vision model and processor for training.
+        Applies quantization and chat template configuration.
+
+        Args:
+            base_model_id: ID of the base model to use
+            model_config: Model configuration parameters
+
+        Returns:
+            tuple: (model, processor) - the initialized model and processor
+        """
+        # Check if model is supported for vision
+        if base_model_id not in self.fourbit_vision_models:
+            raise ValueError(
+                f"Model {base_model_id} is not supported for vision training. "
+                f"Supported vision models: {self.fourbit_vision_models}"
+            )
+
+        # Load vision model with Unsloth
+        model, processor = self.FastVisionModel.from_pretrained(
+            base_model_id,
+            load_in_4bit=True,
+            use_gradient_checkpointing="unsloth",
+        )
+
+        # Apply PEFT for vision model
+        if model_config.get("method", "LoRA") != "Full":
+            model = self.FastVisionModel.get_peft_model(
+                model,
+                finetune_vision_layers=True,
+                finetune_language_layers=True,
+                finetune_attention_modules=True,
+                finetune_mlp_modules=True,
+                r=model_config.get("lora_rank", 16),
+                lora_alpha=model_config.get("lora_alpha", 16),
+                lora_dropout=model_config.get("lora_dropout", 0.05),
+                bias="none",
+                random_state=3407,
+                use_rslora=False,
+                loftq_config=None,
+                target_modules="all-linear",
+                modules_to_save=["lm_head", "embed_tokens"],
+            )
+
+        # Setup chat template for vision
+        processor = self.get_chat_template(processor, "gemma-3")
+
+        return model, processor
+
     def _prepare_unsloth_dataset(self, dataset: Any, tokenizer: Any) -> Any:
         """
         Prepare dataset for Unsloth training format.
         Standardizes and formats the dataset for Unsloth SFTTrainer.
+        NOTE: This does not handle vision datasets because you should never use this on it
 
         Args:
             dataset: The dataset to prepare
@@ -753,6 +1094,57 @@ class UnslothTrainingService(BaseTrainingService):
         dataset = dataset.map(formatting_prompts_func, batched=True)
         return dataset
 
+    def _setup_unsloth_vision_training_args(
+        self, model_config: Dict[str, Any], job_id: str, report_to: str = "none"
+    ) -> Any:
+        """
+        Setup training arguments for Unsloth vision SFTTrainer.
+        Returns a SFTConfig object with vision-specific training hyperparameters.
+
+        Args:
+            model_config: Model configuration parameters
+            job_id: Unique identifier for the training job
+            report_to: Reporting destination for logs (e.g., "none", "wandb")
+
+        Returns:
+            SFTConfig: Configured training arguments for vision training
+        """
+        if self.torch_dtype == torch.bfloat16:
+            bf16 = True
+            fp16 = False
+        else:
+            bf16 = False
+            fp16 = True
+
+        # Vision-specific training arguments
+        return self.SFTConfig(
+            output_dir=f"/tmp/{job_id}",
+            per_device_train_batch_size=model_config.get("batch_size", 4),
+            per_device_eval_batch_size=model_config.get("batch_size", 4),
+            gradient_accumulation_steps=model_config.get(
+                "gradient_accumulation_steps", 4
+            ),
+            warmup_steps=5,
+            num_train_epochs=model_config.get("epochs", 3),
+            max_steps=model_config.get("max_steps", -1),
+            learning_rate=model_config.get("learning_rate", 2e-4),
+            packing=model_config.get("packing", True),
+            fp16=fp16,
+            bf16=bf16,
+            optim="adamw_8bit",
+            lr_scheduler_type="linear",
+            weight_decay=0.01,
+            save_strategy="epoch",
+            logging_steps=10,
+            report_to=report_to,
+            # Vision-specific requirements
+            remove_unused_columns=False,
+            dataset_text_field="",  # NOTE: The docs specify this, for text-only this can be like "text"
+            dataset_kwargs={"skip_prepare_dataset": True},
+            dataset_num_proc=2,
+            max_seq_length=model_config.get("max_seq_length", 2048),
+        )
+
     def _setup_unsloth_training_args(
         self, model_config: Dict[str, Any], job_id: str, report_to: str = "none"
     ) -> Any:
@@ -775,6 +1167,7 @@ class UnslothTrainingService(BaseTrainingService):
             bf16 = False
             fp16 = True
 
+        # Text training arguments
         return self.SFTConfig(
             dataset_text_field="text",  # this matches with the field created in _prepare_unsloth_dataset
             output_dir=f"/tmp/{job_id}",

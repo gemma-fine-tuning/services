@@ -69,15 +69,15 @@ async def inference(request: InferenceRequest):
 @app.post("/batch_inference", response_model=BatchInferenceResponse)
 async def batch_inference(request: BatchInferenceRequest):
     """Run batch inference using a trained adapter"""
-    prompts = request.prompts
+    messages = request.messages
     job_id_or_repo_id = request.job_id_or_repo_id
-    if not prompts or not isinstance(prompts, list) or len(prompts) == 0:
-        raise HTTPException(status_code=400, detail="prompts (list) is required")
+    if not messages or not isinstance(messages, list) or len(messages) == 0:
+        raise HTTPException(status_code=400, detail="messages (list) is required")
     if not job_id_or_repo_id:
         raise HTTPException(status_code=400, detail="job_id_or_repo_id is required")
     try:
         login_hf(request.hf_token)
-        outputs = run_batch_inference(job_id_or_repo_id, prompts, request.storage_type)
+        outputs = run_batch_inference(job_id_or_repo_id, messages, request.storage_type)
         return {"results": outputs}
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Adapter not found")

@@ -15,11 +15,14 @@ class TrainingConfig(BaseModel):
     epochs: int
     # Default this to -1 instead of None to avoid operator errors
     max_steps: Optional[int] = -1
-    max_seq_length: Optional[int]  # used to load pretrained models
+    max_seq_length: Optional[int] = None  # used to load pretrained models
     packing: bool = True  # whether to pack sequences for training
     gradient_accumulation_steps: int
     use_fa2: bool = False  # FA2 is only available when provider is "huggingface"
     provider: Literal["unsloth", "huggingface"] = "huggingface"
+
+    # Vision training configuration
+    modality: Literal["text", "vision"] = "text"
 
 
 class WandbConfig(BaseModel):
