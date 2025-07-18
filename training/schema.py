@@ -33,6 +33,8 @@ class TrainRequest(BaseModel):
     job_name: str
     # This struct is shared between the API and the backend service
     processed_dataset_id: str  # this is dataset_name for now
+    # Dataset modality: "text" for text-only, "vision" for text+images
+    modality: Literal["text", "vision"] = "text"
     # NOTE: This is marked optional for dev but in deployment it should be required
     hf_token: Optional[str] = None
     training_config: TrainingConfig
