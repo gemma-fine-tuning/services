@@ -21,6 +21,9 @@ class TrainingConfig(BaseModel):
     use_fa2: bool = False  # FA2 is only available when provider is "huggingface"
     provider: Literal["unsloth", "huggingface"] = "huggingface"
 
+    # Vision training configuration
+    modality: Literal["text", "vision"] = "text"
+
 
 class WandbConfig(BaseModel):
     api_key: str

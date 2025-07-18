@@ -21,7 +21,8 @@ dependencies = [
     "wandb",
     "unsloth==2025.6.12",
     "unsloth_zoo==2025.6.8",
-    "xformers==0.0.29.post3"
+    "xformers==0.0.29.post3",
+    "pillow>=10.0.0",
 ]
 
 [[tool.uv.index]]
