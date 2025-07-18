@@ -1,7 +1,10 @@
 import logging
 import torch
 from model_storage import StorageStrategyFactory
-from typing import List
+from typing import List, Tuple
+from PIL import Image
+import base64
+import io
 
 
 class InferenceService:
@@ -37,18 +40,20 @@ class InferenceService:
             FileNotFoundError: If adapter artifacts or config are missing
             ValueError: If base model ID is not found in adapter config
         """
-        return self.run_batch_inference(job_id_or_repo_id, [prompt], storage_type)[0]
+        return self.run_batch_inference(
+            job_id_or_repo_id, [[{"role": "user", "content": prompt}]], storage_type
+        )[0]
 
     def run_batch_inference(
-        self, job_id_or_repo_id: str, prompts: List[str], storage_type: str = "gcs"
+        self, job_id_or_repo_id: str, messages: List, storage_type: str = "gcs"
     ) -> List[str]:
         """
-        Fetch adapter artifacts, run generation for a batch of prompts, and return output texts.
+        Fetch adapter artifacts, run generation for a batch of messages, and return output texts.
         Handles model loading, prompt formatting, and output postprocessing for a batch.
 
         Args:
             job_id_or_repo_id (str): Job ID for GCS or HF Hub repository ID
-            prompts (list[str]): List of input texts to generate responses for
+            messages (list[str]): List of input texts to generate responses for
             storage_type (str): Either "gcs" or "hfhub" to specify storage backend
 
         Returns:
@@ -70,15 +75,27 @@ class InferenceService:
         if not base_model_id:
             raise ValueError("Base model ID not found in adapter config")
 
+        is_vision_model = artifact.metadata.get("modality", "text") == "vision"
+
         try:
             if use_unsloth:
-                outputs = self._run_batch_inference_unsloth(
-                    base_model_id, adapter_path, prompts
-                )
+                if is_vision_model:
+                    outputs = self._run_batch_inference_unsloth_vision(
+                        base_model_id, adapter_path, messages
+                    )
+                else:
+                    outputs = self._run_batch_inference_unsloth_text(
+                        base_model_id, adapter_path, messages
+                    )
             else:
-                outputs = self._run_batch_inference_transformers(
-                    base_model_id, adapter_path, prompts
-                )
+                if is_vision_model:
+                    outputs = self._run_batch_inference_transformers_vision(
+                        base_model_id, adapter_path, messages
+                    )
+                else:
+                    outputs = self._run_batch_inference_transformers_text(
+                        base_model_id, adapter_path, messages
+                    )
         except Exception as e:
             logging.error(f"Batch inference failed with error: {str(e)}", exc_info=True)
             raise e
@@ -90,11 +107,50 @@ class InferenceService:
         logging.info(f"Batch inference completed for {job_id_or_repo_id}")
         return outputs
 
-    def _run_batch_inference_transformers(
+    def _prepare_vision_inputs(self, processor, messages: List) -> Tuple[List, List]:
+        """
+        Expected structure of messages:
+        [
+            [
+                {"role": "user", "content": [{"type": "image", "image": "<base64_image>"}]},
+                {"role": "assistant", "content": "Describe the image."}
+            ],
+            ...
+        ]
+
+        This does two things:
+        1. Extracts images from the messages and decodes them from base64 to PIL so you can just pass them to the processor
+        2. Formats the text prompts for the processor (this prevents the need to do this in the main inference function)
+        """
+        images = []
+        texts = []
+        for msgs in messages:
+            # Check for image content
+            image_content = None
+            for msg in msgs:
+                if isinstance(msg["content"], list):
+                    for item in msg["content"]:
+                        if item["type"] == "image":
+                            image_content = item["image"]
+            if image_content is None:
+                raise ValueError("Image content not found in vision prompt")
+            images.append(Image.open(io.BytesIO(base64.b64decode(image_content))))
+
+            # Prepare text content
+            text = processor.apply_chat_template(
+                msgs,
+                tokenize=False,
+                add_generation_prompt=True,
+            ).strip()
+            texts.append(text)
+
+        return images, texts
+
+    def _run_batch_inference_transformers_text(
         self,
         base_model_id: str,
         adapter_path: str,
-        prompts: List[str],
+        messages: List,
     ) -> List[str]:
         from transformers import (
             AutoModelForCausalLM,
@@ -102,7 +158,6 @@ class InferenceService:
             AutoTokenizer,
         )
         from transformers.utils.quantization_config import BitsAndBytesConfig
-        # from peft import PeftModel
 
         model_kwargs = {
             "torch_dtype": torch.float16
@@ -112,12 +167,14 @@ class InferenceService:
             "quantization_config": BitsAndBytesConfig(load_in_4bit=True),
         }
 
-        if base_model_id == "google/gemma-3-1b-it":
+        if base_model_id in ["google/gemma-3-1b-it", "google/gemma-3-1b-pt"]:
             model = AutoModelForCausalLM.from_pretrained(
                 adapter_path,  # We can use adapter_path directly because it is either local or hf repo, no need base_model_id
                 **model_kwargs,
             )
         else:
+            # AutoModelForImageTextToText is still used for text-only models!
+            # The only determining factor is whether the base_model_id is a vision model or not
             model = AutoModelForImageTextToText.from_pretrained(
                 adapter_path,
                 **model_kwargs,
@@ -126,19 +183,16 @@ class InferenceService:
         # model = PeftModel.from_pretrained(model, adapter_path)
         tokenizer = AutoTokenizer.from_pretrained(base_model_id)
 
-        # NOTE: This does not tokenize but only changes each raw input into
-        # chatML then tokenizer adds the system tokens based on the format requirements
-        chat_prompts = [
+        chat_messages = [
             tokenizer.apply_chat_template(
-                [{"role": "user", "content": prompt}],
+                message,
                 tokenize=False,
                 add_generation_prompt=True,
             )
-            for prompt in prompts
+            for message in messages
         ]
         tokenizer.pad_token = tokenizer.eos_token
-        # Here this is actually tokenized
-        batch_inputs = tokenizer(chat_prompts, return_tensors="pt", padding=True).to(
+        batch_inputs = tokenizer(chat_messages, return_tensors="pt", padding=True).to(
             model.device
         )
         stop_tokens = [
@@ -161,35 +215,74 @@ class InferenceService:
         )
         return decoded
 
-    def _run_batch_inference_unsloth(
+    def _run_batch_inference_transformers_vision(
         self,
         base_model_id: str,
         adapter_path: str,
-        prompts: List[str],
+        messages: List,
+    ) -> List[str]:
+        from transformers import (
+            AutoModelForImageTextToText,
+            AutoProcessor,
+        )
+        from transformers.utils.quantization_config import BitsAndBytesConfig
+
+        model_kwargs = {
+            "torch_dtype": torch.float16
+            if torch.cuda.get_device_capability()[0] < 8
+            else torch.bfloat16,
+            "device_map": "auto",
+            "quantization_config": BitsAndBytesConfig(load_in_4bit=True),
+        }
+
+        model = AutoModelForImageTextToText.from_pretrained(
+            adapter_path,
+            **model_kwargs,
+        )
+        processor = AutoProcessor.from_pretrained(base_model_id)
+
+        images, texts = self._prepare_vision_inputs(messages)
+
+        inputs = processor(
+            text=texts,
+            images=images,
+            return_tensors="pt",
+            padding=True,
+        ).to(model.device)
+
+        generated_ids = model.generate(**inputs, max_new_tokens=128)
+        decoded = processor.batch_decode(
+            generated_ids[:, inputs.input_ids.shape[1] :], skip_special_tokens=True
+        )
+        return decoded
+
+    def _run_batch_inference_unsloth_text(
+        self,
+        base_model_id: str,
+        adapter_path: str,
+        messages: List,
     ) -> List[str]:
         from unsloth import FastModel
         from unsloth.chat_templates import get_chat_template
 
-        # Directly load the adapter with base model from hub to avoid issues with PEFT config
         model, tokenizer = FastModel.from_pretrained(
             model_name=adapter_path,
             max_seq_length=2048,
-            load_in_4bit=True,  # For consistency we load both HF and unsloth in 4 bits!
+            load_in_4bit=True,
         )
         FastModel.for_inference(model)
         tokenizer = get_chat_template(tokenizer, chat_template="gemma-3")
         tokenizer.pad_token = tokenizer.eos_token
-        # First we need to convert the raw input into chatML and then add system tokens
-        chat_prompts = [
+
+        chat_messages = [
             tokenizer.apply_chat_template(
-                [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+                prompt,
                 tokenize=False,
                 add_generation_prompt=True,
             )
-            for prompt in prompts
+            for prompt in messages
         ]
-        # Tokenize as a batch
-        batch_inputs = tokenizer(chat_prompts, return_tensors="pt", padding=True).to(
+        batch_inputs = tokenizer(chat_messages, return_tensors="pt", padding=True).to(
             "cuda"
         )
         generated_ids = model.generate(
@@ -202,6 +295,44 @@ class InferenceService:
         input_length = batch_inputs.input_ids.shape[1]
         decoded = tokenizer.batch_decode(
             generated_ids[:, input_length:], skip_special_tokens=True
+        )
+        return decoded
+
+    def _run_batch_inference_unsloth_vision(
+        self,
+        base_model_id: str,
+        adapter_path: str,
+        messages: List,
+    ) -> List[str]:
+        from unsloth import FastVisionModel
+        from unsloth.chat_templates import get_chat_template
+
+        model, processor = FastVisionModel.from_pretrained(
+            model_name=adapter_path,
+            load_in_4bit=True,
+        )
+        FastVisionModel.for_inference(model)
+        processor = get_chat_template(processor, chat_template="gemma-3")
+
+        images, texts = self._prepare_vision_inputs(messages)
+
+        inputs = processor(
+            text=texts,
+            images=images,
+            return_tensors="pt",
+            padding=True,
+        ).to("cuda")
+
+        generated_ids = model.generate(
+            **inputs,
+            max_new_tokens=128,
+            use_cache=True,
+            temperature=1.0,
+            top_p=0.95,
+            top_k=64,
+        )
+        decoded = processor.batch_decode(
+            generated_ids[:, inputs.input_ids.shape[1] :], skip_special_tokens=True
         )
         return decoded
 
@@ -230,7 +361,7 @@ def run_inference(
 
 
 def run_batch_inference(
-    job_id_or_repo_id: str, prompts: List[str], storage_type: str = "gcs"
+    job_id_or_repo_id: str, messages: List, storage_type: str = "gcs"
 ) -> List[str]:
     """
     Convenience function for running batch inference with different storage backends.
@@ -241,12 +372,12 @@ def run_batch_inference(
             - If storage_type is "gcs", this is the job ID
             - If storage_type is "hfhub", this is the Hugging Face repository ID
             - The frontend would determine this automatically
-        prompts (list[str]): List of input texts to generate responses for
+        messages (list): List of input texts or formatted messages to generate responses for
         storage_type (str): Either "gcs" or "hfhub" to specify storage backend
 
     Returns:
         list[str]: List of generated text responses from the model
     """
     return inference_service.run_batch_inference(
-        job_id_or_repo_id, prompts, storage_type
+        job_id_or_repo_id, messages, storage_type
     )
