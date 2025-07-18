@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import logging
@@ -309,11 +310,15 @@ class DatasetService:
     def get_dataset_info(self, dataset_name: str) -> DatasetInfoResponse:
         """
         Get information about a dataset including samples from each split.
+        For vision datasets, image data is encoded as a base64 string.
         """
         try:
             metadata_path = f"processed_datasets/{dataset_name}/metadata.json"
             metadata_content = self.storage.download_data(metadata_path)
             metadata = json.loads(metadata_content)
+
+            # Check dataset modality
+            is_vision_dataset = metadata.get("modality", "text") == "vision"
 
             # Get splits information with samples
             splits_with_samples = []
@@ -327,7 +332,13 @@ class DatasetService:
                     if self.storage.file_exists(split_path):
                         split_data = self.storage.download_binary_data(split_path)
                         table = pq.read_table(io.BytesIO(split_data))
-                        samples = table.slice(0, 5).to_pylist()
+                        raw_samples = table.slice(0, 5).to_pylist()
+
+                        # Process samples based on dataset modality
+                        if is_vision_dataset:
+                            samples = self._process_vision_samples(raw_samples)
+                        else:
+                            samples = raw_samples
                 except Exception as e:
                     logger.warning(
                         f"Could not read samples from split {split_name}: {str(e)}"
@@ -355,6 +366,32 @@ class DatasetService:
         except Exception as e:
             logger.error(f"Error getting dataset info: {str(e)}")
             raise
+
+    def _process_vision_samples(self, samples: list[dict]) -> list[dict]:
+        """
+        Process vision samples to encode image bytes as base64 strings.
+        """
+        for sample in samples:
+            if "messages" in sample and isinstance(sample["messages"], list):
+                for message in sample["messages"]:
+                    if "content" in message and isinstance(message["content"], list):
+                        for content_part in message["content"]:
+                            if (
+                                isinstance(content_part, dict)
+                                and content_part.get("type") == "image"
+                                and "image" in content_part
+                                and isinstance(content_part["image"], dict)
+                                and "bytes" in content_part["image"]
+                                and isinstance(content_part["image"]["bytes"], bytes)
+                            ):
+                                image_bytes = content_part["image"]["bytes"]
+                                base64_image = base64.b64encode(image_bytes).decode(
+                                    "utf-8"
+                                )
+                                content_part["image"] = (
+                                    f"data:image/png;base64,{base64_image}"
+                                )
+        return samples
 
     def _augment_all_splits(
         self, dataset: DatasetDict, augmentation_config: Dict
