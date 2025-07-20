@@ -1,6 +1,6 @@
 import logging
 import torch
-from model_storage import StorageStrategyFactory
+from storage import StorageStrategyFactory
 from typing import List, Tuple
 from PIL import Image
 import base64
@@ -75,7 +75,9 @@ class InferenceService:
         if not base_model_id:
             raise ValueError("Base model ID not found in adapter config")
 
-        is_vision_model = artifact.metadata.get("modality", "text") == "vision"
+        # TODO: This is not compatible with hf hub need changes from training side!
+        # is_vision_model = artifact.metadata.get("modality", "text") == "vision"
+        is_vision_model = self._infer_modality_from_messages(messages) == "vision"
 
         try:
             if use_unsloth:
@@ -335,6 +337,20 @@ class InferenceService:
             generated_ids[:, inputs.input_ids.shape[1] :], skip_special_tokens=True
         )
         return decoded
+
+    def _infer_modality_from_messages(self, messages: List) -> str:
+        """
+        Infer the modality (text or vision) from the messages.
+        This is a simple heuristic based on the content type.
+        """
+        for msg in messages:
+            if isinstance(msg, list):
+                for item in msg:
+                    if isinstance(item["content"], list):
+                        for content in item["content"]:
+                            if content.get("type") == "image":
+                                return "vision"
+        return "text"
 
 
 # default service instance
