@@ -311,7 +311,7 @@ class DatasetService:
     def get_dataset_info(self, dataset_name: str) -> DatasetInfoResponse:
         """
         Get information about a dataset including samples from each split.
-        For vision datasets, PIL Images are automatically converted to base64 data URLs for API compatibility.
+        For vision datasets, PIL Images (bytes) are automatically converted to base64 data URLs for API compatibility.
         """
         try:
             metadata_path = f"processed_datasets/{dataset_name}/metadata.json"
@@ -403,6 +403,9 @@ class DatasetService:
             return dataset
 
     def convert_pil_to_base64(self, obj):
+        """
+        Helper method to convert PIL images or HuggingFace image format to base64.
+        """
         # Case 1: PIL Images
         if isinstance(obj, Image.Image):
             buf = io.BytesIO()

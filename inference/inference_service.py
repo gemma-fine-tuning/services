@@ -161,6 +161,8 @@ class InferenceService:
         )
         from transformers.utils.quantization_config import BitsAndBytesConfig
 
+        # TODO: Do not set quantization config by default let the user select?
+        # However doing this at inference time should work for models trained with and without quantization
         model_kwargs = {
             "torch_dtype": torch.float16
             if torch.cuda.get_device_capability()[0] < 8

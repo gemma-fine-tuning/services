@@ -6,7 +6,7 @@ FastAPI service for running inference on fine-tuned Gemma models.
 
 - **`app.py`** - FastAPI application with endpoints
 - **`inference_service.py`** - Core inference logic
-- **`model_storage.py`** - Model loading from GCS/HuggingFace Hub
+- **`storage.py`** - Model loading from GCS/HuggingFace Hub
 - **`schema.py`** - Request/response models
 
 ## Deployment

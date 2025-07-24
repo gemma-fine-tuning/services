@@ -60,6 +60,7 @@ async def inference(request: InferenceRequest):
         output = run_inference(job_id_or_repo_id, prompt, request.storage_type)
         return {"result": output}
     except FileNotFoundError:
+        logging.error(f"Adapter {job_id_or_repo_id} not found")
         raise HTTPException(status_code=404, detail="Adapter not found")
     except Exception as e:
         logging.error(f"Inference failed with error: {str(e)}", exc_info=True)
@@ -80,6 +81,7 @@ async def batch_inference(request: BatchInferenceRequest):
         outputs = run_batch_inference(job_id_or_repo_id, messages, request.storage_type)
         return {"results": outputs}
     except FileNotFoundError:
+        logging.error(f"Adapter {job_id_or_repo_id} not found")
         raise HTTPException(status_code=404, detail="Adapter not found")
     except Exception as e:
         logging.error(f"Batch inference failed with error: {str(e)}", exc_info=True)
