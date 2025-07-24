@@ -3,6 +3,7 @@ import re
 from typing import Dict, Any, List, Optional
 from datasets import DatasetDict
 import base64
+import io
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -262,6 +263,16 @@ class FormatConverter:
             ...     {"type": "text", "text": "What is in this image?"},
             ...     {"type": "image", "image": PIL_Image_object}
             ... ]
+
+        NOTE: After serialisation (parquet) the `PIL_Image_object` becomes:
+
+            "image": {
+                "bytes": "base64_encoded_image_data",
+                "path": null
+            }
+
+        When bytes cannot be used (e.g. API response) we convert to base64 string.
+        Otherwise, we keep the PIL Image object (e.g. for training).
         """
         content_items = []
 
@@ -294,54 +305,72 @@ class FormatConverter:
 
     def _process_image_field(self, image_data: Any) -> Optional[Any]:
         """
-        Process image data into PIL format.
+        Process image data and keep as PIL Image for efficient storage.
+
+        This approach is optimized for the overall system:
+        1. PIL Images are efficiently stored in parquet format by datasets library
+        2. Training services can directly use PIL Images from parquet
+        3. Only convert to base64 when needed for API responses or inference
 
         Args:
             image_data: Image data in various formats
 
         Returns:
-            Optional[Any]: Processed image or None if processing fails
+            Optional[PIL.Image]: PIL Image object or None if processing fails
         """
         try:
-            # Already a PIL Image
+            # Already a PIL Image - return as-is
             if Image and isinstance(image_data, Image.Image):
+                logger.info("Image is already a PIL Image, converting to RGB")
                 return image_data.convert("RGB")
 
             # Dict with bytes (HuggingFace dataset format)
-            if isinstance(image_data, dict) and "bytes" in image_data:
-                import io
-
+            elif isinstance(image_data, dict) and "bytes" in image_data:
+                logger.info("Image is in HuggingFace format with bytes field")
                 image_bytes = image_data["bytes"]
                 if Image:
-                    image = Image.open(io.BytesIO(image_bytes))
-                    return image.convert("RGB")
+                    pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+                    return pil_image
 
             # Base64 encoded string
-            if isinstance(image_data, str):
+            elif isinstance(image_data, str):
                 if image_data.startswith("data:image/"):
                     # Data URL format
+                    logger.info("Image is a data URL")
                     header, data = image_data.split(",", 1)
                     image_bytes = base64.b64decode(data)
-                else:
+                    pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+                    return pil_image
+                elif self._is_base64_image(image_data):
                     # Regular base64
+                    logger.info("Image is regular base64")
                     image_bytes = base64.b64decode(image_data)
+                    pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+                    return pil_image
+                else:
+                    # Might be a file path
+                    try:
+                        pil_image = Image.open(image_data).convert("RGB")
+                        return pil_image
+                    except Exception as path_error:
+                        logger.warning(f"Failed to open image from path: {path_error}")
+                        return None
 
-                image = Image.open(io.BytesIO(image_bytes))
-                return image.convert("RGB")
+            # Raw bytes
+            elif isinstance(image_data, (bytes, bytearray)):
+                pil_image = Image.open(io.BytesIO(image_data)).convert("RGB")
+                return pil_image
 
-            # File path (if it's a string path)
-            if isinstance(image_data, str) and not self._is_base64_image(image_data):
-                try:
-                    image = Image.open(image_data)
-                    return image.convert("RGB")
-                except Exception:
-                    logger.warning(f"Failed to open image from path: {image_data}")
-                    pass
+            else:
+                logger.error(f"Unsupported image data type: {type(image_data)}")
+                return None
 
         except Exception as e:
             logger.error(f"Error processing image field: {str(e)}")
-
-        return None
+            logger.error(f"Image data type: {type(image_data)}")
+            if hasattr(image_data, "__len__"):
+                logger.error(f"Image data length: {len(image_data)}")
+            return None
 
     def _is_base64_image(self, value: str) -> bool:
         """

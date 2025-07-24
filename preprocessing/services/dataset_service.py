@@ -1,11 +1,12 @@
-import base64
 import io
 import json
 import logging
 import pyarrow.parquet as pq
+import base64
 from datetime import datetime
 from datasets import Dataset, DatasetDict
 from typing import Dict, Literal, Optional
+from PIL import Image
 from storage.base import StorageInterface
 from .dataset_handler import DatasetHandler
 from .dataset_loader import DatasetLoader
@@ -310,15 +311,12 @@ class DatasetService:
     def get_dataset_info(self, dataset_name: str) -> DatasetInfoResponse:
         """
         Get information about a dataset including samples from each split.
-        For vision datasets, image data is encoded as a base64 string.
+        For vision datasets, PIL Images are automatically converted to base64 data URLs for API compatibility.
         """
         try:
             metadata_path = f"processed_datasets/{dataset_name}/metadata.json"
             metadata_content = self.storage.download_data(metadata_path)
             metadata = json.loads(metadata_content)
-
-            # Check dataset modality
-            is_vision_dataset = metadata.get("modality", "text") == "vision"
 
             # Get splits information with samples
             splits_with_samples = []
@@ -332,13 +330,17 @@ class DatasetService:
                     if self.storage.file_exists(split_path):
                         split_data = self.storage.download_binary_data(split_path)
                         table = pq.read_table(io.BytesIO(split_data))
-                        raw_samples = table.slice(0, 5).to_pylist()
+                        samples = table.slice(0, 5).to_pylist()
 
-                        # Process samples based on dataset modality
-                        if is_vision_dataset:
-                            samples = self._process_vision_samples(raw_samples)
-                        else:
-                            samples = raw_samples
+                        # For vision datasets, convert PIL Images to base64 for API response
+                        if metadata.get("modality", "text") == "vision":
+                            samples = [self.convert_pil_to_base64(s) for s in samples]
+                            # Filter out any samples that became None during conversion
+                            samples = [s for s in samples if s is not None]
+                            logger.info(
+                                "Converted vision samples to base64 for API response"
+                            )
+
                 except Exception as e:
                     logger.warning(
                         f"Could not read samples from split {split_name}: {str(e)}"
@@ -366,32 +368,6 @@ class DatasetService:
         except Exception as e:
             logger.error(f"Error getting dataset info: {str(e)}")
             raise
-
-    def _process_vision_samples(self, samples: list[dict]) -> list[dict]:
-        """
-        Process vision samples to encode image bytes as base64 strings.
-        """
-        for sample in samples:
-            if "messages" in sample and isinstance(sample["messages"], list):
-                for message in sample["messages"]:
-                    if "content" in message and isinstance(message["content"], list):
-                        for content_part in message["content"]:
-                            if (
-                                isinstance(content_part, dict)
-                                and content_part.get("type") == "image"
-                                and "image" in content_part
-                                and isinstance(content_part["image"], dict)
-                                and "bytes" in content_part["image"]
-                                and isinstance(content_part["image"]["bytes"], bytes)
-                            ):
-                                image_bytes = content_part["image"]["bytes"]
-                                base64_image = base64.b64encode(image_bytes).decode(
-                                    "utf-8"
-                                )
-                                content_part["image"] = (
-                                    f"data:image/png;base64,{base64_image}"
-                                )
-        return samples
 
     def _augment_all_splits(
         self, dataset: DatasetDict, augmentation_config: Dict
@@ -425,3 +401,45 @@ class DatasetService:
         except Exception as e:
             logger.error(f"Split augmentation failed: {e}")
             return dataset
+
+    def convert_pil_to_base64(self, obj):
+        # Case 1: PIL Images
+        if isinstance(obj, Image.Image):
+            buf = io.BytesIO()
+            obj.save(buf, format="PNG")
+            image_bytes = buf.getvalue()
+            encoded = base64.b64encode(image_bytes).decode("utf-8")
+            return f"data:image/png;base64,{encoded}"
+        elif isinstance(obj, dict):
+            # NOTE: This is the core logic because each "image" field is of this format!
+            # Handle HuggingFace image format: {"bytes": ..., "path": null}
+            if "bytes" in obj and obj.get("path") is None:
+                try:
+                    image_bytes = obj["bytes"]
+                    if isinstance(image_bytes, (bytes, bytearray)):
+                        # Convert bytes to PIL Image, then to base64
+                        pil_image = Image.open(io.BytesIO(image_bytes))
+                        buf = io.BytesIO()
+                        pil_image.save(buf, format="PNG")
+                        encoded_bytes = buf.getvalue()
+                        encoded = base64.b64encode(encoded_bytes).decode("utf-8")
+                        return f"data:image/png;base64,{encoded}"
+                except Exception as e:
+                    logger.warning(f"Failed to convert HF image format: {e}")
+                    return None
+            else:
+                # Regular dict - process recursively and filter nulls
+                converted = {
+                    k: self.convert_pil_to_base64(v)
+                    for k, v in obj.items()
+                    if v is not None
+                }
+                # Filter out any keys that resulted in None values
+                return {k: v for k, v in converted.items() if v is not None}
+        elif isinstance(obj, list):
+            # Filter out None values from lists
+            converted_list = [self.convert_pil_to_base64(v) for v in obj]
+            return [v for v in converted_list if v is not None]
+        elif obj is None:
+            return None
+        return obj
