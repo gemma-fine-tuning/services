@@ -1,5 +1,6 @@
 import logging
 import torch
+import io
 from abc import ABC, abstractmethod
 from storage import storage_service, StorageStrategyFactory
 from schema import TrainRequest, WandbConfig
@@ -355,9 +356,17 @@ class HuggingFaceTrainingService(BaseTrainingService):
                                     # Handle PIL Image objects
                                     if isinstance(img_data, Image.Image):
                                         images.append(img_data.convert("RGB"))
-                                    # Handle other image formats if needed
-                                    elif hasattr(img_data, "convert"):
-                                        images.append(img_data.convert("RGB"))
+                                    # Handle HuggingFace dataset format: {"bytes": ..., "path": null}
+                                    elif (
+                                        isinstance(img_data, dict)
+                                        and "bytes" in img_data
+                                    ):
+                                        image_bytes = img_data["bytes"]
+                                        if isinstance(image_bytes, (bytes, bytearray)):
+                                            pil_image = Image.open(
+                                                io.BytesIO(image_bytes)
+                                            )
+                                            images.append(pil_image.convert("RGB"))
                 return images
 
             images = [
