@@ -27,6 +27,7 @@ class JobMetadata:
     processed_dataset_id: str
     base_model_id: str
     job_name: str
+    modality: Optional[str] = "text"
     adapter_path: Optional[str] = None
     wandb_url: Optional[str] = None
     error: Optional[str] = None
@@ -75,6 +76,7 @@ class JobStateManager:
                 updated_at=data["updated_at"],
                 processed_dataset_id=data["processed_dataset_id"],
                 base_model_id=data["base_model_id"],
+                modality=data.get("modality", "text"),
                 adapter_path=data.get("adapter_path"),
                 wandb_url=data.get("wandb_url"),
                 error=data.get("error"),
@@ -101,6 +103,7 @@ class JobStateManager:
             "job_id": job.job_id,
             "job_name": job.job_name,
             "status": job.status.value,
+            "modality": job.modality,
             "created_at": job.created_at.isoformat(),
             "updated_at": job.updated_at.isoformat(),
             "processed_dataset_id": job.processed_dataset_id,
@@ -139,6 +142,7 @@ class JobStateManager:
                     "updated_at": job_metadata.updated_at,
                     "processed_dataset_id": job_metadata.processed_dataset_id,
                     "base_model_id": job_metadata.base_model_id,
+                    "modality": job_metadata.modality,
                     "adapter_path": job_metadata.adapter_path,
                     "wandb_url": job_metadata.wandb_url,
                     "error": job_metadata.error,
@@ -159,6 +163,7 @@ class JobStateManager:
                         "job_id": data.get("job_id"),
                         "job_name": data.get("job_name"),
                         "job_status": data.get("status"),
+                        "modality": data.get("modality", "text"),
                     }
                 )
             return jobs

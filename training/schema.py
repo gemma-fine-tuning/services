@@ -53,6 +53,7 @@ class JobSubmitResponse(BaseModel):
 class JobStatusResponse(BaseModel):
     job_name: str
     status: Literal["queued", "preparing", "training", "completed", "failed"]
+    modality: Optional[Literal["text", "vision"]] = "text"
     wandb_url: Optional[str] = None
     processed_dataset_id: Optional[str] = None
     adapter_path: Optional[str] = None
@@ -63,6 +64,7 @@ class JobStatusResponse(BaseModel):
 class JobListEntry(BaseModel):
     job_id: str
     job_name: str = "unnamed job"
+    modality: Optional[Literal["text", "vision"]] = "text"
     # "unknown" is a fallback for jobs that don't have a status but are listed
     job_status: Literal[
         "queued", "preparing", "training", "completed", "failed", "unknown"

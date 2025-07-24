@@ -106,6 +106,7 @@ async def start_training(request: TrainRequest):
         processed_dataset_id=request.processed_dataset_id,
         base_model_id=request.training_config.base_model_id,
         job_name=request.job_name,
+        modality=request.modality,
     )
     job_manager.ensure_job_document_exists(job_id, job_metadata)
 

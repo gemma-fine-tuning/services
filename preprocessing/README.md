@@ -1,26 +1,93 @@
 # Preprocessing Service
 
-FastAPI-based preprocessing service for [Gemma fine-tuning](https://github.com/gemma-fine-tuning/). Handles uploading, processing, and storing datasets in Google Cloud Storage or the local file system. Supports both text and vision (multimodal) ChatML format conversion.
+FastAPI service for preprocessing datasets for Gemma fine-tuning. Handles uploading, processing, and storing datasets in Google Cloud Storage or the local file system. Supports both text and vision (multimodal) ChatML format conversion.
 
-## Architecture
+## Structure
 
-This service uses a modular architecture for scalable and flexible preprocessing:
+- **`app.py`** – FastAPI application with endpoints
+- **`services/`** – Core logic for dataset handling, loading, conversion
+- **`storage/`** – Storage backends for GCS and local file system
+- **`schema.py`** – Request/response models
 
-1. **DatasetHandler** - Uploads raw and processed datasets with the help of storage service
-2. **DatasetLoader** - Loads datasets from local file system or HuggingFace datasets into a `DatasetDict` object
-3. **FormatConverter** - Converts datasets to ChatML format (automatically detects and handles vision datasets)
-4. **Storage Service** - Handles storage of datasets in Google Cloud Storage / Local File System
-   - **GCSStorageManager** - Handles storage of datasets in Google Cloud Storage
-   - **LocalStorageManager** - Handles storage of datasets in Local File System
-5. **DatasetService** - Main entry point for API, orchestrates upload, processing, and storage
+## Deployment
 
-## API Endpoints
+The `cloudbuild.yaml` handles the build, push to artifact, and deploying / updating service.
 
-- `GET /health` - Health check
-- `POST /upload` - Upload dataset files
-- `POST /process` - Start preprocessing job (supports vision datasets)
-- `GET /datasets` - List all datasets
-- `GET /datasets/{dataset_name}` - Get dataset information
+```bash
+cd preprocessing
+gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
+```
+
+## Endpoints
+
+### POST `/upload`
+
+Upload a dataset file.
+
+**Request:**
+Upload a file using multipart/form-data. See API docs for details.
+
+**Response:**
+
+```json
+{
+  "dataset_name": "your_dataset_name",
+  "status": "uploaded"
+}
+```
+
+### POST `/process`
+
+Start preprocessing job (supports text and vision datasets).
+
+**Request:**
+
+```json
+{
+  "dataset_name": "your_dataset_name",
+  "config": {
+    /* field mappings and options, see below */
+  }
+}
+```
+
+**Response:**
+
+```json
+{
+  "status": "processing_started",
+  "processed_dataset": "your_dataset_name_processed"
+}
+```
+
+### GET `/datasets`
+
+List all datasets.
+
+**Response:**
+
+```json
+["dataset1", "dataset2"]
+```
+
+### GET `/datasets/{dataset_name}`
+
+Get dataset information.
+
+**Response:**
+
+```json
+{
+  "dataset_name": "your_dataset_name",
+  "num_rows": 1234,
+  "columns": ["col1", "col2", ...],
+  "info": { /* additional metadata */ }
+}
+```
+
+### GET `/health`
+
+Health check endpoint.
 
 ## Supported Formats
 
@@ -107,91 +174,11 @@ Vision processing is automatically enabled when image field mappings are detecte
 
 ## Deployment
 
-### Cloud Deployment
-
-Use the following command to build, push, and deploy the Cloud Run service:
-
-```bash
-gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
-```
-
-### Local Development
-
-This application uses [`uv`](https://docs.astral.sh/uv/) for dependency management. You can also use `pip` if preferred.
-
-```bash
-uv run uvicorn app:app --port 8080
-```
-
-Add `--reload` for development mode to auto-reload on code changes.
-
-### Docker
-
-```bash
-docker build -t preprocessing-service .
-docker run -p 8080:8080 -e GCS_DATA_BUCKET_NAME=your-bucket preprocessing-service
-```
-
-### Cloud Run
-
-```bash
-gcloud run deploy preprocessing-service \
-  --source . \
-  --platform managed \
-  --region us-central1 \
-  --allow-unauthenticated \
-  --set-env-vars GCS_DATA_BUCKET_NAME=your-bucket
-```
-
-> **Note:** The recommended region is `us-central1` for GPU support and lower latency with the fine-tuning service and data bucket.
+- Cloud Run service
+- Environment: `GCS_DATA_BUCKET_NAME` required for GCS storage
+- Port: 8080 (default)
 
 ## Environment Variables
 
 - `GCS_DATA_BUCKET_NAME`: Google Cloud Storage bucket name (required for GCS storage)
 - See `.env.example` for more options
-
-## Features
-
-### Current Features
-
-- ✅ Dataset upload to Google Cloud Storage / Local File System
-- ✅ HuggingFace dataset loading
-- ✅ ChatML format conversion (text and vision)
-- ✅ Train/test dataset splitting
-- ✅ Multiple file format support (JSON, JSONL, CSV, Parquet, Excel)
-- ✅ Storage of processed datasets in Google Cloud Storage / Local File System
-- ✅ Getting processed datasets' information
-- ✅ Data augmentation capabilities
-
-### Planned Features
-
-- 🔄 PDF file processing
-- 🔄 Processing datasets for different fine-tuning tasks
-
-## API Documentation
-
-Once running, visit `http://localhost:8080/docs` for interactive API documentation.
-
-## How It Works
-
-1. **Dataset Upload**: Upload raw datasets via API or HuggingFace datasets.
-2. **Format Conversion**: Converts datasets to ChatML format (text or vision) using configurable field mappings.
-3. **Vision Handling**: Automatically detects image fields and processes images for multimodal ChatML output.
-4. **Storage**: Stores processed datasets in GCS or local file system.
-5. **Dataset Info**: Query processed datasets and their metadata via API.
-
-## Note on Vision Datasets
-
-- Dataset must contain at least one image column
-- Images can be in various formats: PIL Image objects, base64 encoded strings, file paths, HuggingFace dataset format with `bytes` field
-- Example: `unsloth/LaTeX_OCR`
-
-## Development
-
-To add new preprocessing features:
-
-1. Add methods to [`DatasetService`](./services/dataset_service.py)
-2. Add new API endpoints in [`app.py`](./app.py)
-3. Update Pydantic models in [`schema.py`](./schema.py)
-
-The modular design makes it easy to extend functionality while maintaining clean separation of concerns.
