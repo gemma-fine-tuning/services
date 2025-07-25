@@ -1,5 +1,6 @@
 import logging
 import torch
+import time
 from storage import StorageStrategyFactory
 from typing import List, Tuple
 from PIL import Image
@@ -63,6 +64,9 @@ class InferenceService:
         for this use case and batch inference is much more suitable. However, if needed just add back
         by setting a TextStreamer object in model.generate() call
         """
+        logging.info(f"Starting batch inference for {job_id_or_repo_id}...")
+        start_time = time.time()
+
         strategy = StorageStrategyFactory.create_strategy(storage_type)
         artifact = strategy.load_model_info(job_id_or_repo_id)
 
@@ -106,7 +110,9 @@ class InferenceService:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-        logging.info(f"Batch inference completed for {job_id_or_repo_id}")
+        logging.info(
+            f"Batch inference for {job_id_or_repo_id} completed in {time.time() - start_time:.2f} seconds."
+        )
         return outputs
 
     def _prepare_vision_inputs(self, processor, messages: List) -> Tuple[List, List]:
@@ -136,6 +142,16 @@ class InferenceService:
                             image_content = item["image"]
             if image_content is None:
                 raise ValueError("Image content not found in vision prompt")
+
+            # Handle data URI header (e.g., "data:image/png;base64,...")
+            if "," in image_content:
+                image_content = image_content.split(",", 1)[1]
+
+            # Pad the base64 string if it's not a multiple of 4
+            padding = len(image_content) % 4
+            if padding:
+                image_content += "=" * (4 - padding)
+
             images.append(Image.open(io.BytesIO(base64.b64decode(image_content))))
 
             # Prepare text content
@@ -245,7 +261,7 @@ class InferenceService:
         )
         processor = AutoProcessor.from_pretrained(base_model_id)
 
-        images, texts = self._prepare_vision_inputs(messages)
+        images, texts = self._prepare_vision_inputs(processor, messages)
 
         inputs = processor(
             text=texts,
@@ -318,7 +334,7 @@ class InferenceService:
         FastVisionModel.for_inference(model)
         processor = get_chat_template(processor, chat_template="gemma-3")
 
-        images, texts = self._prepare_vision_inputs(messages)
+        images, texts = self._prepare_vision_inputs(processor, messages)
 
         inputs = processor(
             text=texts,

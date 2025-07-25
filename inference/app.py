@@ -1,6 +1,7 @@
 import os
 import logging
 from fastapi import FastAPI, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from google.cloud import firestore
 from huggingface_hub import login
 from schema import (
@@ -57,7 +58,9 @@ async def inference(request: InferenceRequest):
         raise HTTPException(status_code=400, detail="job_id_or_repo_id is required")
     try:
         login_hf(request.hf_token)
-        output = run_inference(job_id_or_repo_id, prompt, request.storage_type)
+        output = await run_in_threadpool(
+            run_inference, job_id_or_repo_id, prompt, request.storage_type
+        )
         return {"result": output}
     except FileNotFoundError:
         logging.error(f"Adapter {job_id_or_repo_id} not found")
@@ -78,7 +81,9 @@ async def batch_inference(request: BatchInferenceRequest):
         raise HTTPException(status_code=400, detail="job_id_or_repo_id is required")
     try:
         login_hf(request.hf_token)
-        outputs = run_batch_inference(job_id_or_repo_id, messages, request.storage_type)
+        outputs = await run_in_threadpool(
+            run_batch_inference, job_id_or_repo_id, messages, request.storage_type
+        )
         return {"results": outputs}
     except FileNotFoundError:
         logging.error(f"Adapter {job_id_or_repo_id} not found")
