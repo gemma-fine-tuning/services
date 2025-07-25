@@ -81,7 +81,47 @@ Get dataset information.
   "dataset_name": "your_dataset_name",
   "num_rows": 1234,
   "columns": ["col1", "col2", ...],
-  "info": { /* additional metadata */ }
+  "info": {
+    "dataset_subset": "default",
+    "dataset_source": "upload",
+    "dataset_id": "abc123",
+    "created_at": "2025-07-25T12:34:56",
+    "modality": "text", // or "vision"
+    "splits": [
+      {
+        "split_name": "train",
+        "num_rows": 1000,
+        "path": "processed_datasets/your_dataset_name/train.parquet",
+        "samples": [
+          // For text datasets:
+          {
+            "messages": [
+              { "role": "system", "content": "You are a helpful assistant." },
+              { "role": "user", "content": "What is machine learning?" },
+              { "role": "assistant", "content": "Machine learning is a field of AI..." }
+            ]
+          },
+          // ... up to 5 samples
+          // For vision datasets:
+          {
+            "messages": [
+              { "role": "system", "content": "Describe the images." },
+              {
+                "role": "user",
+                "content": [
+                  { "type": "text", "text": "Compare these images." },
+                  { "type": "image", "image": "data:image/png;base64,..." },
+                  { "type": "image", "image": "data:image/png;base64,..." }
+                ]
+              },
+              { "role": "assistant", "content": "The first image shows..." }
+            ]
+          }
+        ]
+      },
+      // ... more splits (e.g., "test")
+    ]
+  }
 }
 ```
 

@@ -76,7 +76,7 @@ class DatasetInfoSample(BaseModel):
     dataset_subset: str
     dataset_source: Literal["upload", "huggingface"]
     # Modality of the dataset: 'text' or 'vision'
-    modality: str = "text"
+    modality: Literal["text", "vision"] = "text"
     dataset_id: str
     num_examples: int
     created_at: str
@@ -96,7 +96,7 @@ class DatasetInfoFull(BaseModel):
     dataset_subset: str
     dataset_source: Literal["upload", "huggingface"]
     # Modality of the dataset: 'text' or 'vision'
-    modality: str = "text"
+    modality: Literal["text", "vision"] = "text"
     dataset_id: str
     created_at: str
     splits: List[Dict[str, Any]]
