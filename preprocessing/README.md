@@ -125,6 +125,8 @@ Get dataset information.
 }
 ```
 
+> NOTE: Modality is returned when you fetch info for a dataset and it is determined by the service and saved to metadata during processing. It is not set by the user.
+
 ### GET `/health`
 
 Health check endpoint.
@@ -139,16 +141,30 @@ Health check endpoint.
 
 ## ChatML Format
 
-Datasets are converted to the standardized ChatML format for conversational AI training. This format supports both text-only and multimodal (vision) conversations.
+Datasets are converted to the standardized ChatML format for conversational AI training. This format supports both text-only and multimodal (vision) conversations. We have standardized to use list format (containing "type") in `content` field for consistency between vision and text datasets.
 
 ### Text ChatML Example
 
 ```json
 {
   "messages": [
-    { "role": "system", "content": "You are a helpful assistant." },
-    { "role": "user", "content": "What is machine learning?" },
-    { "role": "assistant", "content": "Machine learning is a field of AI..." }
+    {
+      "role": "system",
+      "content": [{ "type": "text", "text": "You are a helpful assistant." }]
+    },
+    {
+      "role": "user",
+      "content": [{ "type": "text", "text": "What is deep learning?" }]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Deep learning is a subset of machine learning..."
+        }
+      ]
+    }
   ]
 }
 ```
