@@ -6,7 +6,7 @@ FastAPI service for running inference on fine-tuned Gemma models.
 
 - **`app.py`** - FastAPI application with endpoints
 - **`inference_service.py`** - Core inference logic
-- **`model_storage.py`** - Model loading from GCS/HuggingFace Hub
+- **`storage.py`** - Model loading from GCS/HuggingFace Hub
 - **`schema.py`** - Request/response models
 
 ## Deployment
@@ -54,7 +54,11 @@ Batch inference for multiple prompts.
   "hf_token": "hf_...",
   "storage_type": "gcs" | "hfhub",
   "job_id_or_repo_id": "training_abc123_gemma-2b" | "user/repo",
-  "prompts": ["Prompt 1", "Prompt 2"]
+  "messages": [
+    [
+      {"role": "user", "content": "What is the capital of France?"}
+    ]
+  ]
 }
 ```
 

@@ -1,106 +1,224 @@
 # Preprocessing Service
 
-FastAPI based preprocessing service for [Gemma fine-tuning](https://github.com/gemma-fine-tuning/). It handles uploading local datasets, preprocessing them and storing them in Google Cloud Storage / Local file system.
+FastAPI service for preprocessing datasets for Gemma fine-tuning. Handles uploading, processing, and storing datasets in Google Cloud Storage or the local file system. Supports both text and vision (multimodal) ChatML format conversion.
 
-## Architecture
+## Structure
 
-This service follows a simplified 5-component architecture:
-
-1. **DatasetHandler** - Uploads raw and processed datasets with the help of storage service
-2. **DatasetLoader** - Loads datasets from local file system or HuggingFace datasets into a `DatasetDict` object
-3. **FormatConverter** - Converts datasets to ChatML format
-4. **Storage Service** - Handles storage of datasets in Google Cloud Storage / Local File System
-    1. **GCSStorageManager** - Handles storage of datasets in Google Cloud Storage
-    2. **LocalStorageManager** - Handles storage of datasets in Local File System
-5. **DatasetService** - Utilizes the above components to handle dataset upload, processing and storage. This is the main entry point for the API.
-
-## API Endpoints
-
-- `GET /health` - Health check
-- `POST /upload` - Upload dataset files
-- `POST /process` - Start preprocessing job
-- `GET /datasets` - List all datasets
-- `GET /datasets/{dataset_name}` - Get dataset information
-
-## Supported Formats
-
-- JSON, JSONL, CSV, Parquet and Excel files
-- HuggingFace datasets
+- **`app.py`** – FastAPI application with endpoints
+- **`services/`** – Core logic for dataset handling, loading, conversion
+- **`storage/`** – Storage backends for GCS and local file system
+- **`schema.py`** – Request/response models
 
 ## Deployment
 
-### Cloud Deployment
-
-> IMPORTANT: This has been updated so pls use this command below:
+The `cloudbuild.yaml` handles the build, push to artifact, and deploying / updating service.
 
 ```bash
+cd preprocessing
 gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
 ```
 
-This command will handle building, pushing, and deploying Cloud Run service.
+## Endpoints
 
-### Local Development
+### POST `/upload`
 
-This application uses [`uv`](https://docs.astral.sh/uv/) for dependency management instead of `pip`, hence, the following commands use `uv` instead of `pip`. However, you can use `pip` if you prefer.
+Upload a dataset file.
 
-```bash
-uv run uvicorn app:app
+**Request:**
+Upload a file using multipart/form-data. See API docs for details.
+
+**Response:**
+
+```json
+{
+  "dataset_name": "your_dataset_name",
+  "status": "uploaded"
+}
 ```
 
-Add `--reload` if you are developing and want to automatically reload the server on code changes. (Not recommended for production)
+### POST `/process`
 
-### Docker
+Start preprocessing job (supports text and vision datasets).
 
-```bash
-docker build -t preprocessing-service .
-docker run -p 8080:8080 -e GCS_DATA_BUCKET_NAME=your-bucket preprocessing-service
+**Request:**
+
+```json
+{
+  "dataset_name": "your_dataset_name",
+  "config": {
+    /* field mappings and options, see below */
+  }
+}
 ```
 
-### Cloud Run
+**Response:**
 
-```bash
-gcloud run deploy preprocessing-service \
-  --source . \
-  --platform managed \
-  --region us-central1 \
-  --allow-unauthenticated \
-  --set-env-vars GCS_DATA_BUCKET_NAME=your-bucket
+```json
+{
+  "status": "processing_started",
+  "processed_dataset": "your_dataset_name_processed"
+}
 ```
 
-> **Note**: We recommend using the `us-central1` region because GPU support is available in this region. So it'll be required for the fine-tuning service to run. Having both the services and the data bucket in the same region will help in reducing the latency.
+### GET `/datasets`
+
+List all datasets.
+
+**Response:**
+
+```json
+["dataset1", "dataset2"]
+```
+
+### GET `/datasets/{dataset_name}`
+
+Get dataset information.
+
+**Response:**
+
+```json
+{
+  "dataset_name": "your_dataset_name",
+  "num_rows": 1234,
+  "columns": ["col1", "col2", ...],
+  "info": {
+    "dataset_subset": "default",
+    "dataset_source": "upload",
+    "dataset_id": "abc123",
+    "created_at": "2025-07-25T12:34:56",
+    "modality": "text", // or "vision"
+    "splits": [
+      {
+        "split_name": "train",
+        "num_rows": 1000,
+        "path": "processed_datasets/your_dataset_name/train.parquet",
+        "samples": [
+          // For text datasets:
+          {
+            "messages": [
+              { "role": "system", "content": "You are a helpful assistant." },
+              { "role": "user", "content": "What is machine learning?" },
+              { "role": "assistant", "content": "Machine learning is a field of AI..." }
+            ]
+          },
+          // ... up to 5 samples
+          // For vision datasets:
+          {
+            "messages": [
+              { "role": "system", "content": "Describe the images." },
+              {
+                "role": "user",
+                "content": [
+                  { "type": "text", "text": "Compare these images." },
+                  { "type": "image", "image": "data:image/png;base64,..." },
+                  { "type": "image", "image": "data:image/png;base64,..." }
+                ]
+              },
+              { "role": "assistant", "content": "The first image shows..." }
+            ]
+          }
+        ]
+      },
+      // ... more splits (e.g., "test")
+    ]
+  }
+}
+```
+
+### GET `/health`
+
+Health check endpoint.
+
+## Supported Formats
+
+- JSON, JSONL, CSV, Parquet, Excel files
+- HuggingFace datasets
+- **Vision datasets** with image columns (JPEG, PNG, BMP, GIF, TIFF, WebP)
+
+> **Note:** Uploading custom vision datasets is not currently supported, but you can use existing HuggingFace multimodal datasets.
+
+## ChatML Format
+
+Datasets are converted to the standardized ChatML format for conversational AI training. This format supports both text-only and multimodal (vision) conversations.
+
+### Text ChatML Example
+
+```json
+{
+  "messages": [
+    { "role": "system", "content": "You are a helpful assistant." },
+    { "role": "user", "content": "What is machine learning?" },
+    { "role": "assistant", "content": "Machine learning is a field of AI..." }
+  ]
+}
+```
+
+### Vision ChatML Example
+
+```json
+{
+  "messages": [
+    { "role": "system", "content": "Describe the images." },
+    {
+      "role": "user",
+      "content": [
+        { "type": "text", "text": "Compare these images." },
+        { "type": "image", "image": "<base64 or image object>" },
+        { "type": "image", "image": "<base64 or image object>" }
+      ]
+    },
+    { "role": "assistant", "content": "The first image shows..." }
+  ]
+}
+```
+
+> **Note:** Images are always included in the user message as a list of content items. See below for vision configuration.
+
+## Vision Configuration
+
+Vision processing is automatically enabled when image field mappings are detected. Simply add image field mappings to your configuration (you can include multiple images in a single user message).
+
+```json
+{
+  "config": {
+    "vision_enabled": true,
+    "field_mappings": {
+      "user_field": {
+        "type": "template",
+        "value": "Compare these images and tell me the differences."
+      },
+      "assistant_field": {
+        "type": "column",
+        "value": "comparison"
+      },
+      "image_field_1": {
+        "type": "image",
+        "value": "image1"
+      },
+      "image_field_2": {
+        "type": "image",
+        "value": "image2"
+      },
+      "image_field_3": {
+        "type": "image",
+        "value": "image3"
+      }
+    }
+  }
+}
+```
+
+- Images are **always added to user messages only**
+- Images are processed in the order they appear in the field_mappings
+- Supported image formats: PIL Image objects, base64 strings, file paths, HuggingFace dataset format with `bytes` field
+
+## Deployment
+
+- Cloud Run service
+- Environment: `GCS_DATA_BUCKET_NAME` required for GCS storage
+- Port: 8080 (default)
 
 ## Environment Variables
 
-> Checkout the [`.env.example`](../.env.example) file for the list of environment variables.
-
-## Features
-
-### Current Features
-
-- ✅ Dataset upload to Google Cloud Storage / Local File System
-- ✅ HuggingFace dataset loading
-- ✅ Conversation format conversion
-- ✅ Train/test dataset splitting
-- ✅ Multiple file format support (JSON, JSONL, CSV, Parquet, Excel)
-- ✅ Storage of processed datasets in Google Cloud Storage / Local File System
-- ✅ Getting processed datasets' information
-- ✅ Data augmentation capabilities
-
-### Planned Features (Placeholders)
-
-- 🔄 PDF file processing
-- 🔄 Processing datasets for different fine-tuning tasks
-
-## API Documentation
-
-Once running, visit `http://localhost:8080/docs` for interactive API documentation.
-
-## Development
-
-To add new preprocessing features:
-
-1. Add methods to [`DatasetService`](./services/dataset_service.py)
-2. Add new API endpoints in [`app.py`](./app.py)
-3. Update Pydantic models in [`schema.py`](./schema.py)
-
-The modular design makes it easy to extend functionality while maintaining clean separation of concerns.
+- `GCS_DATA_BUCKET_NAME`: Google Cloud Storage bucket name (required for GCS storage)
+- See `.env.example` for more options

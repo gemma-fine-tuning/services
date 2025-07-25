@@ -32,7 +32,7 @@ app.add_middleware(
 storage_type = os.getenv("STORAGE_TYPE", "local")  # "gcs" or "local"
 
 if storage_type == "gcs":
-    bucket_name = os.getenv("GCS_DATA_BUCKET_NAME", "gemma-dataset-dev")
+    bucket_name = os.getenv("GCS_DATA_BUCKET_NAME", "gemma-dataset-bucket")
     storage_manager = GCSStorageManager(bucket_name)
     logger.info(f"Using GCS storage with bucket: {bucket_name}")
 else:

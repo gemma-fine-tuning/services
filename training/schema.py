@@ -15,7 +15,7 @@ class TrainingConfig(BaseModel):
     epochs: int
     # Default this to -1 instead of None to avoid operator errors
     max_steps: Optional[int] = -1
-    max_seq_length: Optional[int]  # used to load pretrained models
+    max_seq_length: Optional[int] = None  # used to load pretrained models
     packing: bool = True  # whether to pack sequences for training
     gradient_accumulation_steps: int
     use_fa2: bool = False  # FA2 is only available when provider is "huggingface"
@@ -33,6 +33,8 @@ class TrainRequest(BaseModel):
     job_name: str
     # This struct is shared between the API and the backend service
     processed_dataset_id: str  # this is dataset_name for now
+    # Dataset modality: "text" for text-only, "vision" for text+images
+    modality: Literal["text", "vision"] = "text"
     # NOTE: This is marked optional for dev but in deployment it should be required
     hf_token: Optional[str] = None
     training_config: TrainingConfig
@@ -51,7 +53,9 @@ class JobSubmitResponse(BaseModel):
 class JobStatusResponse(BaseModel):
     job_name: str
     status: Literal["queued", "preparing", "training", "completed", "failed"]
+    modality: Optional[Literal["text", "vision"]] = "text"
     wandb_url: Optional[str] = None
+    processed_dataset_id: Optional[str] = None
     adapter_path: Optional[str] = None
     base_model_id: Optional[str] = None
     error: Optional[str] = None
@@ -60,6 +64,7 @@ class JobStatusResponse(BaseModel):
 class JobListEntry(BaseModel):
     job_id: str
     job_name: str = "unnamed job"
+    modality: Optional[Literal["text", "vision"]] = "text"
     # "unknown" is a fallback for jobs that don't have a status but are listed
     job_status: Literal[
         "queued", "preparing", "training", "completed", "failed", "unknown"

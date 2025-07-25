@@ -27,6 +27,7 @@ Start a new training job.
   "processed_dataset_id": "dataset_abc123",
   "job_name": "My Training Job",
   "hf_token": "hf_...",
+  "modality": "text" | "vision",
   "training_config": {
     "method": "LoRA" | "QLoRA" | "Full" | "RL",
     "base_model_id": "google/gemma-2b",
@@ -65,7 +66,8 @@ List all jobs.
     {
       "job_id": "training_abc123_gemma-2b_def456",
       "job_name": "My Training Job",
-      "job_status": "queued" | "preparing" | "training" | "completed" | "failed" | "unknown"
+      "job_status": "queued" | "preparing" | "training" | "completed" | "failed" | "unknown",
+      "modality": "text" | "vision",
     }
   ]
 }
@@ -81,6 +83,7 @@ Get training job status.
 {
   "job_name": "My Training Job",
   "status": "queued" | "preparing" | "training" | "completed" | "failed",
+  "modality": "text" | "vision",
   "wandb_url": "https://wandb.ai/...",
   "adapter_path": "gs://bucket/path",
   "base_model_id": "google/gemma-2b",

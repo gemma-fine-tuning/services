@@ -13,7 +13,7 @@ class DatasetUploadResponse(BaseModel):
 
 
 class FieldMappingConfig(BaseModel):
-    type: Literal["column", "template"]
+    type: Literal["column", "template", "image"]
     value: str
 
 
@@ -75,6 +75,8 @@ class DatasetInfoSample(BaseModel):
     dataset_name: str
     dataset_subset: str
     dataset_source: Literal["upload", "huggingface"]
+    # Modality of the dataset: 'text' or 'vision'
+    modality: Literal["text", "vision"] = "text"
     dataset_id: str
     num_examples: int
     created_at: str
@@ -93,6 +95,8 @@ class DatasetInfoFull(BaseModel):
     dataset_name: str
     dataset_subset: str
     dataset_source: Literal["upload", "huggingface"]
+    # Modality of the dataset: 'text' or 'vision'
+    modality: Literal["text", "vision"] = "text"
     dataset_id: str
     created_at: str
     splits: List[Dict[str, Any]]
