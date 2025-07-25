@@ -466,8 +466,21 @@ class FormatConverter:
         user_content = (
             self._extract_multimodal_content(example, field_mappings, "user")
             if is_multimodal
-            else self._extract_text_content(example, field_mappings, "user")
+            else [
+                {
+                    "type": "text",
+                    "text": self._extract_text_content(example, field_mappings, "user"),
+                }
+            ]
         )
+
+        # Filter out empty text content
+        if is_multimodal:
+            user_content = [
+                item for item in user_content if item.get("text") or item.get("image")
+            ]
+        else:
+            user_content = [item for item in user_content if item.get("text")]
 
         if user_content:
             return {"role": "user", "content": user_content}
