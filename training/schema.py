@@ -66,7 +66,7 @@ class JobListEntry(BaseModel):
     job_name: str = "unnamed job"
     modality: Optional[Literal["text", "vision"]] = "text"
     # "unknown" is a fallback for jobs that don't have a status but are listed
-    job_status: Literal[
+    status: Literal[
         "queued", "preparing", "training", "completed", "failed", "unknown"
     ] = "unknown"
 
