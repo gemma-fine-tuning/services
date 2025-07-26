@@ -162,7 +162,7 @@ class JobStateManager:
                     {
                         "job_id": data.get("job_id"),
                         "job_name": data.get("job_name"),
-                        "job_status": data.get("status"),
+                        "status": data.get("status"),
                         "modality": data.get("modality", "text"),
                     }
                 )
