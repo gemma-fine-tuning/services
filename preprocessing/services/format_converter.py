@@ -117,7 +117,9 @@ class FormatConverter:
             )
             # Filter out failed conversions (empty dictionaries)
             transformed_dataset = transformed_dataset.filter(
-                lambda x: "messages" in x and x["messages"]
+                lambda x: isinstance(x, dict)
+                and "messages" in x
+                and len(x["messages"]) > 0
             )
 
             logger.info(f"Converted dataset splits: {list(transformed_dataset.keys())}")
@@ -175,13 +177,21 @@ class FormatConverter:
             if assistant_msg:
                 messages.append(assistant_msg)
 
-            # Validate
+            # Validate -- this sometimes fail for a few samples but we still return a empty dict instead of raising an error
             if self._validate_messages(messages):
                 return {"messages": messages}
-            return {}
+            else:
+                logger.warning(
+                    f"Validation failed for example with {len(messages)} messages"
+                )
+                return {"messages": []}
         except Exception as e:
-            logger.warning(f"Failed to convert single example: {e}")
-            return {}
+            logger.error(f"Failed to convert single example: {e}")
+            logger.error(
+                f"Example keys: {list(example.keys()) if isinstance(example, dict) else 'Not a dict'}"
+            )
+            logger.error(f"Field mappings: {field_mappings}")
+            return {"messages": []}
 
     def _extract_text_content(
         self,
@@ -321,12 +331,12 @@ class FormatConverter:
         try:
             # Already a PIL Image - return as-is
             if Image and isinstance(image_data, Image.Image):
-                logger.info("Image is already a PIL Image, converting to RGB")
+                # logger.info("Image is already a PIL Image, converting to RGB")
                 return image_data.convert("RGB")
 
             # Dict with bytes (HuggingFace dataset format)
             elif isinstance(image_data, dict) and "bytes" in image_data:
-                logger.info("Image is in HuggingFace format with bytes field")
+                # logger.info("Image is in HuggingFace format with bytes field")
                 image_bytes = image_data["bytes"]
                 if Image:
                     pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
@@ -336,14 +346,14 @@ class FormatConverter:
             elif isinstance(image_data, str):
                 if image_data.startswith("data:image/"):
                     # Data URL format
-                    logger.info("Image is a data URL")
+                    # logger.info("Image is a data URL")
                     header, data = image_data.split(",", 1)
                     image_bytes = base64.b64decode(data)
                     pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
                     return pil_image
                 elif self._is_base64_image(image_data):
                     # Regular base64
-                    logger.info("Image is regular base64")
+                    # logger.info("Image is regular base64")
                     image_bytes = base64.b64decode(image_data)
                     pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
                     return pil_image
@@ -477,10 +487,16 @@ class FormatConverter:
         # Filter out empty text content
         if is_multimodal:
             user_content = [
-                item for item in user_content if item.get("text") or item.get("image")
+                item
+                for item in user_content
+                if (item.get("text") and item.get("text").strip()) or item.get("image")
             ]
         else:
-            user_content = [item for item in user_content if item.get("text")]
+            user_content = [
+                item
+                for item in user_content
+                if item.get("text") and item.get("text").strip()
+            ]
 
         if user_content:
             return {"role": "user", "content": user_content}
