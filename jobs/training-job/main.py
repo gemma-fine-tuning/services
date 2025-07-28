@@ -13,6 +13,9 @@ GCS_CONFIG_BUCKET = os.getenv("GCS_CONFIG_BUCKET_NAME", "gemma-train-config")
 
 
 def load_training_config(job_id):
+    """
+    Load the training configuration JSON from GCS for a given job_id.
+    """
     gcs_path = os.getenv("TRAINING_CONFIG_GCS_PATH")
     if gcs_path:
         try:
@@ -46,6 +49,32 @@ def load_training_config(job_id):
                 f"Error downloading default config from GCS: {e}", exc_info=True
             )
             sys.exit(1)
+
+
+def delete_training_config(job_id: str) -> None:
+    """
+    Delete the training config JSON from GCS for given job_id.
+    """
+    gcs_path = (
+        os.getenv("TRAINING_CONFIG_GCS_PATH")
+        or f"gs://{GCS_CONFIG_BUCKET}/{job_id}.json"
+    )
+    try:
+        client = storage.Client()
+        if gcs_path.startswith("gs://"):
+            bucket_name, blob_name = gcs_path[5:].split("/", 1)
+        else:
+            logging.warning(f"Invalid GCS path for deletion: {gcs_path}")
+            return
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(blob_name)
+        if blob.exists():
+            blob.delete()
+            logging.info(f"Deleted config blob: {gcs_path}")
+        else:
+            logging.warning(f"Config blob not found for deletion: {gcs_path}")
+    except Exception as e:
+        logging.error(f"Error deleting config from GCS: {e}", exc_info=True)
 
 
 def main():
@@ -87,6 +116,9 @@ def main():
     except Exception as e:
         logging.error(f"Training job {job_id} failed: {str(e)}", exc_info=True)
         # Exception handling is done by JobTracker context manager
+    finally:
+        # Clean up the training config file from GCS
+        delete_training_config(job_id)
 
 
 if __name__ == "__main__":

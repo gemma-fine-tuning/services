@@ -66,7 +66,7 @@ List all jobs.
     {
       "job_id": "training_abc123_gemma-2b_def456",
       "job_name": "My Training Job",
-      "job_status": "queued" | "preparing" | "training" | "completed" | "failed" | "unknown",
+      "status": "queued" | "preparing" | "training" | "completed" | "failed" | "unknown",
       "modality": "text" | "vision",
     }
   ]
