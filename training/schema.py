@@ -16,21 +16,33 @@ class EvaluationMetrics(BaseModel):
 class TrainingConfig(BaseModel):
     method: Literal["Full", "LoRA", "QLoRA", "RL"]
     base_model_id: str
-    lora_rank: Optional[int]
-    lora_alpha: Optional[int]
-    lora_dropout: Optional[float]
-    learning_rate: float
+    lora_rank: Optional[int] = 16
+    lora_alpha: Optional[int] = 16
+    lora_dropout: Optional[float] = 0.05
+
+    learning_rate: float = 2e-4
     # Seems like batch size = 8 will cause OOM on the L4 on Cloud Run
     # I haven't enforced a check yet but for prod we should probably limit this
     batch_size: int = 4
-    epochs: int
+    gradient_accumulation_steps: int = 4
+    epochs: int = 3
     # Default this to -1 instead of None to avoid operator errors
     max_steps: Optional[int] = -1
-    max_seq_length: Optional[int] = None  # used to load pretrained models
-    packing: bool = True  # whether to pack sequences for training
-    gradient_accumulation_steps: int
+
+    # NOTE: Packing only works with FA2
+    packing: bool = False  # whether to pack sequences for training
     use_fa2: bool = False  # FA2 is only available when provider is "huggingface"
+
     provider: Literal["unsloth", "huggingface"] = "huggingface"
+
+    max_seq_length: Optional[int] = None  # used to load pretrained models
+    lr_scheduler_type: Optional[str] = "linear"
+    save_strategy: Optional[str] = "epoch"
+    logging_steps: Optional[int] = 10
+
+    # NOTE: Only specify eval_strategy if you actually provide eval_dataset
+    eval_strategy: Optional[str] = "no"  # "no", "steps", "epoch"
+    eval_steps: Optional[int] = 50  # Required if eval_strategy="steps"
 
 
 class WandbConfig(BaseModel):
@@ -46,9 +58,9 @@ class TrainRequest(BaseModel):
     processed_dataset_id: str  # this is dataset_name for now
     # Dataset modality: "text" for text-only, "vision" for text+images
     modality: Literal["text", "vision"] = "text"
-    # NOTE: This is marked optional for dev but in deployment it should be required
-    hf_token: Optional[str] = None
+    hf_token: str = None
     training_config: TrainingConfig
+
     export: Literal["gcs", "hfhub"] = "gcs"
     # If export is hfhub, this is the Hugging Face repo ID to push the model to
     hf_repo_id: Optional[str] = None
