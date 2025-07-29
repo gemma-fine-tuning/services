@@ -2,9 +2,13 @@
 
 > To be written and documented...
 
-This project sets up cloud infra for runing fine tuning jobs on Gemma models using the Hugging Face ecosystem. We leverage GCP technologies such as Cloud Run, Cloud Storage, Firestore for a scalable and efficient system.
+This project sets up cloud infra for runing fine tuning jobs on Gemma models using the Hugging Face ecosystem. We leverage GCP technologies such as Cloud Run, Cloud Storage, Firestore for a scalable and efficient system. No code, intuitive UI, scalable infrastructure powered by GPU on cloud.
 
 Jet Chiang & Adarsh Dubey -- Google Summer of Code 2025 @ Google DeepMind
+
+## GSoC Midterm Demo
+
+[![Demo Video](https://img.youtube.com/vi/r4jW997KXvc/0.jpg)](https://www.youtube.com/watch?v=r4jW997KXvc)
 
 ## Features
 
