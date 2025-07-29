@@ -4,6 +4,7 @@ from typing import Optional, Dict, Any
 from google.cloud import firestore
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from schema import EvaluationMetrics
 
 
 class JobStatus(Enum):
@@ -30,6 +31,7 @@ class JobMetadata:
     modality: Optional[str] = "text"
     adapter_path: Optional[str] = None
     wandb_url: Optional[str] = None
+    metrics: Optional[EvaluationMetrics] = None
     error: Optional[str] = None
 
 
@@ -79,6 +81,7 @@ class JobStateManager:
                 modality=data.get("modality", "text"),
                 adapter_path=data.get("adapter_path"),
                 wandb_url=data.get("wandb_url"),
+                metrics=data.get("metrics"),
                 error=data.get("error"),
             )
         except Exception as e:
@@ -99,7 +102,7 @@ class JobStateManager:
         if not job:
             return None
 
-        return {
+        status_dict = {
             "job_id": job.job_id,
             "job_name": job.job_name,
             "status": job.status.value,
@@ -110,8 +113,10 @@ class JobStateManager:
             "base_model_id": job.base_model_id,
             "adapter_path": job.adapter_path,
             "wandb_url": job.wandb_url,
+            "metrics": job.metrics,
             "error": job.error,
         }
+        return status_dict
 
     def ensure_job_document_exists(
         self, job_id: str, job_metadata: Optional[JobMetadata] = None

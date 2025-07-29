@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Optional, Dict, Any
 from google.cloud import firestore
 from dataclasses import dataclass
 
@@ -71,16 +71,24 @@ class JobStateManager:
         self.logger.info(f"Marked job {job_id} as training")
 
     def mark_completed(
-        self, job_id: str, adapter_path: str, base_model_id: str
+        self,
+        job_id: str,
+        adapter_path: str,
+        base_model_id: str,
+        metrics: Optional[Dict[str, Any]] = None,
     ) -> None:
-        self.collection.document(job_id).update(
-            {
-                "status": JobStatus.COMPLETED.value,
-                "updated_at": datetime.now(timezone.utc),
-                "adapter_path": adapter_path,
-                "base_model_id": base_model_id,
-            }
-        )
+        """
+        Mark job as completed and optionally store evaluation metrics.
+        """
+        update_data = {
+            "status": JobStatus.COMPLETED.value,
+            "updated_at": datetime.now(timezone.utc),
+            "adapter_path": adapter_path,
+            "base_model_id": base_model_id,
+        }
+        if metrics is not None:
+            update_data["metrics"] = metrics
+        self.collection.document(job_id).update(update_data)
         self.logger.info(f"Marked job {job_id} as completed")
 
     def mark_failed(self, job_id: str, error: str) -> None:
@@ -134,9 +142,16 @@ class JobTracker:
         """Mark job as training"""
         self.job_manager.mark_training(self.job_id, wandb_url)
 
-    def completed(self, adapter_path: str, base_model_id: str):
-        """Mark job as completed"""
-        self.job_manager.mark_completed(self.job_id, adapter_path, base_model_id)
+    def completed(
+        self,
+        adapter_path: str,
+        base_model_id: str,
+        metrics: Optional[Dict[str, Any]] = None,
+    ):
+        """Mark job as completed and record evaluation metrics"""
+        self.job_manager.mark_completed(
+            self.job_id, adapter_path, base_model_id, metrics
+        )
 
     def failed(self, error: str):
         """Mark job as failed"""

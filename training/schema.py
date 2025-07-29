@@ -2,6 +2,17 @@ from pydantic import BaseModel
 from typing import Literal, Optional, List
 
 
+class EvaluationMetrics(BaseModel):
+    """
+    Evaluation metrics structure to hold results after training.
+    This is used to store metrics like accuracy, loss, etc.
+    """
+
+    accuracy: Optional[float] = None
+    perplexity: Optional[float] = None
+    eval_loss: Optional[float] = None
+
+
 class TrainingConfig(BaseModel):
     method: Literal["Full", "LoRA", "QLoRA", "RL"]
     base_model_id: str
@@ -58,6 +69,8 @@ class JobStatusResponse(BaseModel):
     processed_dataset_id: Optional[str] = None
     adapter_path: Optional[str] = None
     base_model_id: Optional[str] = None
+    # Evaluation metrics recorded after training
+    metrics: Optional[EvaluationMetrics] = None
     error: Optional[str] = None
 
 

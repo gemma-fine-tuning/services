@@ -8,6 +8,57 @@ from typing import Optional, Tuple, List, Dict, Any
 from job_manager import JobTracker
 
 
+def compute_metrics(eval_pred):
+    """
+    This does not use evaluate library for now
+    in the future we will use this: https://huggingface.co/docs/evaluate/en/transformers_integrations
+
+    Steps:
+    1. First test and validate whatever we already have right now
+    1.5 Refactor whatever we have right now this is too many changes for one feature (boilerplate lmao)
+    2. setup the integration with evaluate library using "metric"
+    3. Pick metrics, measurements, etc. to use and put them down here and ship!
+    """
+    logits, labels = eval_pred
+    # SFTTrainer will provide logits and labels.
+    # Labels might have -100 for ignored tokens.
+    # Convert labels to 0s for perplexity calculation where -100 are ignored
+    labels[labels == -100] = 0
+
+    # Ensure logits and labels are on CPU for metric calculation if they are on GPU
+    logits = torch.from_numpy(logits).cpu()
+    labels = torch.from_numpy(labels).cpu()
+
+    # Perplexity expects logits as input (or probabilities)
+    # The metric will handle masking out the 0s (originally -100) if configured
+    # You might need to adjust based on how your model outputs and how perplexity metric expects
+    # Often, you need to flatten the logits and labels for token-level metrics.
+
+    # Example for perplexity (might need adjustment based on your specific model output)
+    # For causal LMs, the labels are shifted input_ids.
+    # The perplexity metric typically works directly on inputs and model outputs.
+    # It's often easier to let the Trainer handle eval loss (which is perplexity-related)
+    # and add custom metrics for other things like accuracy if needed.
+
+    # For a simple eval_loss:
+    # The Trainer already calculates eval_loss which is cross-entropy, related to perplexity.
+    # If you want to compute perplexity explicitly, it's 2 ** eval_loss.
+
+    # For other metrics like accuracy, you'd convert logits to predictions
+    predictions = logits.argmax(axis=-1)
+
+    # Flatten everything to compare token by token, ignoring -100
+    valid_labels = labels[labels != -100]
+    valid_predictions = predictions[labels != -100]
+
+    # Simple accuracy example
+    accuracy = (valid_predictions == valid_labels).float().mean().item()
+
+    # You can add more metrics here (ROUGE, BLEU for generation tasks, but that's more complex)
+
+    return {"perplexity": 2 ** eval_pred.metrics["eval_loss"], "accuracy": accuracy}
+
+
 class BaseTrainingService(ABC):
     """
     Abstract base class for all training services.
@@ -234,6 +285,10 @@ class HuggingFaceTrainingService(BaseTrainingService):
 
         # 5. Setup training args
         training_args = self._setup_training_args(model_config, job_id, report_to)
+        # Configure evaluation strategy if eval dataset provided
+        if prepared_eval_dataset is not None:
+            # run evaluation each epoch
+            setattr(training_args, "evaluation_strategy", "epoch")
 
         # 6. Train
         # Clear CUDA cache before training
@@ -246,12 +301,16 @@ class HuggingFaceTrainingService(BaseTrainingService):
             if available_mem < 4 * 1024 * 1024 * 1024:  # 4GB threshold
                 raise RuntimeError("Not enough GPU memory available for training")
 
+        # Initialize trainer with metrics if evaluation dataset is present
         trainer = self.SFTTrainer(
             model=model,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=prepared_eval_dataset,
             processing_class=tokenizer,
+            compute_metrics=compute_metrics
+            if prepared_eval_dataset is not None
+            else None,
         )
 
         # Progress tracking: start actual training with WandB URL
@@ -259,10 +318,18 @@ class HuggingFaceTrainingService(BaseTrainingService):
 
         trainer.train()
 
-        # Use storage strategy to save model
+        # Run evaluation explicitly at the end if eval_dataset is provided
+        metrics = None
+        if prepared_eval_dataset is not None:
+            # eval_dataset has already been set and tokenized before
+            eval_results = trainer.evaluate()
+            logging.info(f"Evaluation results: {eval_results}")
+            metrics = eval_results
+
+        # Use storage strategy to save model and mark completion
         try:
             storage_strategy = StorageStrategyFactory.create_strategy(export)
-            _ = storage_strategy.save_model(
+            artifact = storage_strategy.save_model(
                 model,
                 tokenizer,
                 f"/tmp/{job_id}_adapter",
@@ -276,6 +343,14 @@ class HuggingFaceTrainingService(BaseTrainingService):
         except Exception as e:
             logging.error(f"Failed to save model: {str(e)}", exc_info=True)
             raise e
+
+        # Mark job as completed with optional evaluation metrics
+        job_tracker.completed(artifact.remote_path, artifact.base_model_id, metrics)
+
+        return {
+            "adapter_path": artifact.remote_path,
+            "base_model_id": artifact.base_model_id,
+        }
 
     def _run_training_hf_vision_core(
         self,
@@ -438,12 +513,18 @@ class HuggingFaceTrainingService(BaseTrainingService):
             lr_scheduler_type="linear",
             weight_decay=0.01,
             save_strategy="epoch",
+            # use alternatively use steps for eval_strategy and set eval_steps
+            # NOTE: We chose epoch because evaluation takes a lot of memory lol
             logging_steps=10,
             report_to=report_to,
             dataset_text_field="",  # need a dummy field for collator
         )
 
         training_args.remove_unused_columns = False  # important for collator
+
+        if eval_dataset is not None:
+            # run evaluation each epoch
+            training_args.evaluation_strategy = "epoch"
 
         # 6. Create trainer
         trainer = self.SFTTrainer(
@@ -453,11 +534,18 @@ class HuggingFaceTrainingService(BaseTrainingService):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processor.tokenizer,
+            compute_metrics=compute_metrics if eval_dataset is not None else None,
         )
 
         # 7. Train
         job_tracker.training(wandb_url)
         trainer.train()
+
+        metrics = None
+        if eval_dataset is not None:
+            eval_results = trainer.evaluate()
+            logging.info(f"Initial evaluation results: {eval_results}")
+            metrics = eval_results
 
         # 8. Save model
         try:
@@ -485,7 +573,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
             logging.error(f"Failed to save vision model: {str(e)}", exc_info=True)
             raise e
 
-        job_tracker.completed(artifact.remote_path, artifact.base_model_id)
+        job_tracker.completed(artifact.remote_path, artifact.base_model_id, metrics)
 
         return {
             "adapter_path": artifact.remote_path,
@@ -622,6 +710,8 @@ class HuggingFaceTrainingService(BaseTrainingService):
             push_to_hub=False,
             logging_steps=10,
             report_to=report_to,
+            # NOTE: This is not available because gemma3 chat template does not contain {% generate %} tag
+            # assistant_only_loss=True,  # for conversational dataset
         )
 
     def _prepare_hf_dataset(self, dataset: Any, tokenizer: Any) -> Any:
@@ -807,6 +897,11 @@ class UnslothTrainingService(BaseTrainingService):
             model_config, job_id, report_to
         )
 
+        if prepared_eval_dataset is not None:
+            # TODO: Make this user configuration step or epoch in the future
+            # If step we need to set eval_steps
+            training_args["eval_strategy"] = "epoch"
+
         # 6. Train with Unsloth
         torch.cuda.empty_cache()
         trainer = self.SFTTrainer(
@@ -815,6 +910,9 @@ class UnslothTrainingService(BaseTrainingService):
             train_dataset=train_dataset,
             eval_dataset=prepared_eval_dataset,
             args=training_args,
+            compute_metrics=compute_metrics
+            if prepared_eval_dataset is not None
+            else None,
         )
 
         # Apply response-only training for text models
@@ -828,6 +926,12 @@ class UnslothTrainingService(BaseTrainingService):
         job_tracker.training(wandb_url)
 
         trainer.train()
+
+        metrics = None
+        if prepared_eval_dataset is not None:
+            eval_results = trainer.evaluate()
+            logging.info(f"Evaluation results: {eval_results}")
+            metrics = eval_results
 
         # Use storage strategy to save model
         try:
@@ -853,7 +957,8 @@ class UnslothTrainingService(BaseTrainingService):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        job_tracker.completed(artifact.remote_path, artifact.base_model_id)
+        # Mark job as completed with evaluation metrics if available
+        job_tracker.completed(artifact.remote_path, artifact.base_model_id, metrics)
 
         return {
             "adapter_path": artifact.remote_path,
@@ -895,6 +1000,9 @@ class UnslothTrainingService(BaseTrainingService):
             model_config, job_id, report_to
         )
 
+        if eval_dataset is not None:
+            training_args["eval_strategy"] = "epoch"
+
         # 5. Train with Unsloth Vision
         torch.cuda.empty_cache()
 
@@ -915,6 +1023,12 @@ class UnslothTrainingService(BaseTrainingService):
         job_tracker.training(wandb_url)
 
         trainer.train()
+
+        metrics = None
+        if eval_dataset is not None:
+            eval_results = trainer.evaluate()
+            logging.info(f"Evaluation results: {eval_results}")
+            metrics = eval_results
 
         # Use storage strategy to save model
         try:
@@ -940,7 +1054,7 @@ class UnslothTrainingService(BaseTrainingService):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        job_tracker.completed(artifact.remote_path, artifact.base_model_id)
+        job_tracker.completed(artifact.remote_path, artifact.base_model_id, metrics)
 
         return {
             "adapter_path": artifact.remote_path,
