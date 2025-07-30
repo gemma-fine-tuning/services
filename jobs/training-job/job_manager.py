@@ -1,9 +1,8 @@
 import logging
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, Dict, Any
 from google.cloud import firestore
-from dataclasses import dataclass
+from datetime import datetime, timezone
 
 
 class JobStatus(Enum):
@@ -16,39 +15,22 @@ class JobStatus(Enum):
     FAILED = "failed"
 
 
-@dataclass
-class JobMetadata:
-    """Job metadata structure"""
-
-    job_id: str
-    status: JobStatus
-    created_at: datetime
-    updated_at: datetime
-    processed_dataset_id: str
-    base_model_id: str
-    adapter_path: Optional[str] = None
-    wandb_url: Optional[str] = None
-    error: Optional[str] = None
-
-
 class JobStateManager:
     """
     Centralized job state management using Firestore using repository pattern.
     Provides clean API for tracking training job progress.
     """
 
-    def __init__(
-        self, db_client: firestore.Client, collection_name: str = "training_jobs"
-    ):
+    def __init__(self, project_id: str, collection_name: str = "training_jobs"):
         """
         Initialize job state manager.
 
         Args:
-            db_client: Firestore client instance
+            project_id: Google Cloud project ID
             collection_name: Name of the Firestore collection for jobs
         """
-        self.db = db_client
-        self.collection = db_client.collection(collection_name)
+        self.db = firestore.Client(project_id=project_id)
+        self.collection = self.db.collection(collection_name)
         self.logger = logging.getLogger(__name__)
 
     def mark_preparing(self, job_id: str) -> None:
