@@ -5,6 +5,7 @@ import numpy as np
 from typing import List, Callable
 from storage import StorageStrategyFactory
 from job_manager import JobTracker
+from schema import ExportConfig
 
 
 def run_evaluation(trainer):
@@ -16,14 +17,14 @@ def run_evaluation(trainer):
     return eval_results
 
 
+# TODO: Update the actual merging and etc method here since you have the model AND tokenizer and config
 def save_and_track(
-    export: str,
+    export_config: ExportConfig,
     model,
     tokenizer,
     job_id: str,
     base_model_id: str,
     use_unsloth: bool,
-    hf_repo_id: str,
     job_tracker: JobTracker,
     metrics: dict | None = None,
     tmp_prefix: str = "adapter",
@@ -31,17 +32,24 @@ def save_and_track(
     """
     Save the model using storage strategy, cleanup, and mark job as completed.
     """
-    storage_strategy = StorageStrategyFactory.create_strategy(export)
+    # Use export_config.destination to determine storage strategy
+    storage_strategy = StorageStrategyFactory.create_strategy(export_config.destination)
+
+    # Build metadata with export configuration
+    metadata = {
+        "job_id": job_id,
+        "base_model_id": base_model_id,
+        "use_unsloth": use_unsloth,
+        "hf_repo_id": export_config.hf_repo_id or "",
+        "export_format": export_config.format,
+        "quantization": export_config.quantization,
+    }
+
     artifact = storage_strategy.save_model(
         model,
         tokenizer,
         f"/tmp/{job_id}_{tmp_prefix}",
-        {
-            "job_id": job_id,
-            "base_model_id": base_model_id,
-            "use_unsloth": use_unsloth,
-            "hf_repo_id": hf_repo_id,
-        },
+        metadata,
     )
     storage_strategy.cleanup(artifact)
     job_tracker.completed(artifact.remote_path, artifact.base_model_id, metrics)

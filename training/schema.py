@@ -57,18 +57,24 @@ class WandbConfig(BaseModel):
     log_model: Optional[Literal["false", "checkpoint", "end"]] = "end"
 
 
-class TrainRequest(BaseModel):
-    job_name: str
-    # This struct is shared between the API and the backend service
-    processed_dataset_id: str  # this is dataset_name for now
-    # Dataset modality: "text" for text-only, "vision" for text+images
-    modality: Literal["text", "vision"] = "text"
-    hf_token: str = None
-    training_config: TrainingConfig
+class ExportConfig(BaseModel):
+    """Configuration for model export"""
 
-    export: Literal["gcs", "hfhub"] = "gcs"
-    # If export is hfhub, this is the Hugging Face repo ID to push the model to
+    format: Literal["merged", "gguf", "adapter"] = "adapter"
+    quantization: Optional[Literal["none", "int8", "fp16"]] = None
+    destination: Literal["gcs", "hfhub"] = "gcs"
     hf_repo_id: Optional[str] = None
+
+
+class TrainRequest(BaseModel):
+    # This struct is shared between the API and the backend service
+    processed_dataset_id: str
+    hf_token: str
+    training_config: TrainingConfig
+    export_config: ExportConfig
+
+    # TODO: Duplicate field with TrainingConfig, consider refactoring
+    modality: Literal["text", "vision"] = "text"
 
     # Weights & Biases logging configuration
     wandb_config: Optional[WandbConfig] = None

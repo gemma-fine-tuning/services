@@ -110,14 +110,14 @@ class BaseTrainingService(ABC):
     ) -> Any:
         # derive file prefix from modality
         prefix = "hf_vision" if req.training_config.modality == "vision" else "adapter"
+
         return save_and_track(
-            req.export,
+            req.export_config,
             model,
             tokenizer,
             tracker.job_id,
             req.training_config.base_model_id,
             req.training_config.provider == "unsloth",
-            req.hf_repo_id or "",
             tracker,
             metrics,
             tmp_prefix=prefix,
