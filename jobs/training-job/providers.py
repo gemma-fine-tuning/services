@@ -5,7 +5,7 @@ from typing import Any, Tuple
 
 from storage import storage_service
 from base import BaseTrainingService
-from utils import compute_metrics
+from utils import create_compute_metrics
 from schema import TrainingConfig
 
 
@@ -190,11 +190,11 @@ class HuggingFaceTrainingService(BaseTrainingService):
     def _create_trainer(
         self,
         model: Any,
-        modality: str,
         tokenizer: Any,
         train_ds: Any,
         eval_ds: Any,
         args: Any,
+        cfg: TrainingConfig,
     ) -> Any:
         return self.SFTTrainer(
             model=model,
@@ -203,9 +203,11 @@ class HuggingFaceTrainingService(BaseTrainingService):
             eval_dataset=eval_ds,
             processing_class=tokenizer,
             data_collator=self._create_vision_collate_fn(tokenizer)
-            if modality == "vision"
+            if cfg.modality == "vision"
             else None,
-            compute_metrics=compute_metrics if eval_ds is not None else None,
+            compute_metrics=create_compute_metrics(
+                cfg.evaluation_metrics, cfg.batch_eval_metrics
+            ),
         )
 
     def _create_vision_collate_fn(self, processor):
@@ -444,11 +446,11 @@ class UnslothTrainingService(BaseTrainingService):
     def _create_trainer(
         self,
         model: Any,
-        modality: str,
         tokenizer: Any,
         train_ds: Any,
         eval_ds: Any,
         args: Any,
+        cfg: TrainingConfig,
     ) -> Any:
         trainer = self.SFTTrainer(
             model=model,
@@ -458,14 +460,16 @@ class UnslothTrainingService(BaseTrainingService):
             processing_class=tokenizer,
             data_collator=(
                 self.UnslothVisionDataCollator(model, tokenizer)
-                if modality == "vision"
+                if cfg.modality == "vision"
                 else None
             ),
-            compute_metrics=compute_metrics if eval_ds is not None else None,
+            compute_metrics=create_compute_metrics(
+                cfg.evaluation_metrics, cfg.batch_eval_metrics
+            ),
         )
 
         # Apply response-only for text
-        if modality == "text":
+        if cfg.modality == "text":
             trainer = self.train_on_responses_only(
                 trainer,
                 instruction_part="<start_of_turn>user\n",

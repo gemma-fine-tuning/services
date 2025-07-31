@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional, Tuple
 
-from schema import TrainRequest, WandbConfig
+from schema import TrainRequest, WandbConfig, TrainingConfig
 from utils import run_evaluation, save_and_track
 from job_manager import JobTracker
 
@@ -15,38 +15,49 @@ class BaseTrainingService(ABC):
     def run_training(self, req: TrainRequest, tracker: JobTracker) -> Dict[str, Any]:
         # 1. Preparation
         tracker.preparing()
+
         # 2. Download datasets
         train_ds, eval_ds = self._download_dataset(req.processed_dataset_id)
+
         # 3. Model + tokenizer setup
         model, tokenizer = self._setup_model(req.training_config)
+
         # 4. Dataset preparation
         train_dataset, eval_dataset = self._prepare_dataset(
             train_ds, eval_ds, tokenizer, req.training_config
         )
+
         # 5. Optional PEFT wrapping
         model = self._apply_peft_if_needed(model, req.training_config)
+
         # 6. WandB initialization
         report_to, wandb_url = self._setup_wandb(req.wandb_config, tracker.job_id)
+
         # 7. Build training arguments
         training_args = self._build_training_args(
             req.training_config, tracker.job_id, report_to
         )
+
         # 8. Instantiate trainer
         trainer = self._create_trainer(
             model,
-            req.training_config.modality,  # determines if data collator is needed
             tokenizer,
             train_dataset,
             eval_dataset,
             training_args,
+            req.training_config,
         )
+
         # 9. Train
         tracker.training(wandb_url)
         trainer.train()
+
         # 10. Evaluate
         metrics = self._evaluate_if_needed(trainer, eval_dataset)
+
         # 11. Save + record in tracker
         artifact = self._save_and_track(model, tokenizer, tracker, metrics, req)
+
         return {
             "adapter_path": artifact.remote_path,
             "base_model_id": artifact.base_model_id,
@@ -57,28 +68,30 @@ class BaseTrainingService(ABC):
     def _download_dataset(self, dataset_id: str) -> Tuple[Any, Any]: ...
 
     @abstractmethod
-    def _setup_model(self, cfg: Any) -> Tuple[Any, Any]: ...
+    def _setup_model(self, cfg: TrainingConfig) -> Tuple[Any, Any]: ...
 
     @abstractmethod
     def _prepare_dataset(
-        self, train_ds: Any, eval_ds: Any, tokenizer: Any, cfg: Dict[str, Any]
+        self, train_ds: Any, eval_ds: Any, tokenizer: Any, cfg: TrainingConfig
     ) -> Tuple[Any, Any]: ...
 
     @abstractmethod
-    def _apply_peft_if_needed(self, model: Any, cfg: Any) -> Any: ...
+    def _apply_peft_if_needed(self, model: Any, cfg: TrainingConfig) -> Any: ...
 
     @abstractmethod
-    def _build_training_args(self, cfg: Any, job_id: str, report_to: str) -> Any: ...
+    def _build_training_args(
+        self, cfg: TrainingConfig, job_id: str, report_to: str
+    ) -> Any: ...
 
     @abstractmethod
     def _create_trainer(
         self,
         model: Any,
-        modality: str,
         tokenizer: Any,
         train_ds: Any,
         eval_ds: Any,
         args: Any,
+        cfg: TrainingConfig,
     ) -> Any: ...
 
     # --- Default behaviors ---

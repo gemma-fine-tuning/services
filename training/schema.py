@@ -44,6 +44,11 @@ class TrainingConfig(BaseModel):
     eval_strategy: Optional[str] = "no"  # "no", "steps", "epoch"
     eval_steps: Optional[int] = 50  # Required if eval_strategy="steps"
 
+    # Metrics configuration
+    evaluation_metrics: Optional[List[str]] = ["accuracy", "perplexity"]
+    # Set to True to enable batch evaluation mode for metrics computation
+    batch_eval_metrics: Optional[bool] = False
+
 
 class WandbConfig(BaseModel):
     api_key: str
