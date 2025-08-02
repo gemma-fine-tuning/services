@@ -10,7 +10,7 @@ from schema import (
     BatchInferenceRequest,
     BatchInferenceResponse,
 )
-from inference_service import run_inference, run_batch_inference
+from base import run_inference, run_batch_inference
 from typing import Optional
 
 app = FastAPI(

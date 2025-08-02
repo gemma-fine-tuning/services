@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 import shutil
 import io
 import pyarrow.parquet as pq
+from huggingface_hub import HfApi, hf_hub_download
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,6 +22,13 @@ class CloudStoredModelMetadata:
     gcs_prefix: str  # GCS folder prefix for adapter artifacts
     use_unsloth: bool = False
     local_dir: Optional[str] = None  # Local path where artifacts are downloaded
+    hf_repo_id: Optional[str] = None  # HuggingFace repo ID if applicable
+
+    # these must match the value in export_config
+    export_format: Optional[str] = (
+        None  # Format of the exported model (e.g., gguf, adapter)
+    )
+    quantization: Optional[str] = None  # Quantization type if applicable
 
 
 class CloudStorageService:
@@ -45,11 +53,13 @@ class CloudStorageService:
         """
         Upload model artifacts and metadata to GCS, return remote URI
 
-        Ensure that `job_id` is unique for each training run because the
-        artifacts are stored under `trained_adapters/{job_id}` prefix.
+        Uses different folder structures based on export format:
+        - trained_adapters/{job_id}/ for adapter-only exports
+        - merged_models/{job_id}/ for merged model exports
+        - gguf_models/{job_id}/ for GGUF format exports
 
         Args:
-            model_dir (str): Local directory containing adapter files
+            model_dir (str): Local directory containing model files
             metadata (CloudStoredModelMetadata): Metadata object with job details
 
         Returns:
@@ -57,22 +67,33 @@ class CloudStorageService:
         """
         try:
             bucket = self.storage_client.bucket(self.export_bucket)
-            prefix = f"trained_adapters/{metadata.job_id}"
+
+            # Determine folder prefix based on export format
+            format_prefix = self._get_format_prefix(metadata.export_format)
+            prefix = f"{format_prefix}/{metadata.job_id}"
+
+            # Upload all files in the model directory
             for root, dirs, files in os.walk(model_dir):
                 for fn in files:
                     src = os.path.join(root, fn)
                     rel = os.path.relpath(src, model_dir)
                     blob = bucket.blob(f"{prefix}/{rel}")
                     blob.upload_from_filename(src)
+
             meta_dict = {
                 "job_id": metadata.job_id,
                 "base_model_id": metadata.base_model_id,
                 "use_unsloth": metadata.use_unsloth,
+                "export_format": metadata.export_format,
+                "quantization": metadata.quantization,
+                "hf_repo_id": metadata.hf_repo_id,
             }
             blob = bucket.blob(f"{prefix}/config.json")
             blob.upload_from_string(
                 json.dumps(meta_dict), content_type="application/json"
             )
+
+            # This is the location for this export request
             return f"gs://{self.export_bucket}/{prefix}/"
         except Exception as e:
             logger.error(
@@ -82,14 +103,17 @@ class CloudStorageService:
             raise
 
     def download_model(
-        self, job_id: str, local_dir: Optional[str] = None
+        self,
+        job_id: str,
+        export_format: str = "adapter",
+        local_dir: Optional[str] = None,
     ) -> CloudStoredModelMetadata:
         """
         Download model artifacts and metadata from cloud storage into a local dir
-        NOTE: This is not used for now but will be used when continuing to train from a checkpoint in future
 
         Args:
             job_id (str): Unique identifier for the training job
+            export_format (str): Export format to determine correct folder structure
             local_dir (Optional[str]): Local directory to download artifacts to.
                                        If None, uses a temporary directory.
 
@@ -98,15 +122,22 @@ class CloudStorageService:
         """
         try:
             bucket = self.storage_client.bucket(self.export_bucket)
-            prefix = f"trained_adapters/{job_id}"
+
+            # Determine folder prefix based on export format
+            format_prefix = self._get_format_prefix(export_format)
+            prefix = f"{format_prefix}/{job_id}"
+
             config_blob = bucket.blob(f"{prefix}/config.json")
             if not config_blob.exists():
                 logger.error(f"Adapter config not found in GCS for job {job_id}")
                 raise FileNotFoundError("Adapter config not found")
             meta = json.loads(config_blob.download_as_text())
+
             if not local_dir:
                 local_dir = f"/tmp/inference_{job_id}"
             os.makedirs(local_dir, exist_ok=True)
+
+            # Download all files except config
             for blob in bucket.list_blobs(prefix=prefix):
                 rel = blob.name[len(prefix) + 1 :]
                 if rel == "config.json":
@@ -114,12 +145,16 @@ class CloudStorageService:
                 dst = os.path.join(local_dir, rel)
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 blob.download_to_filename(dst)
+
             metadata = CloudStoredModelMetadata(
                 job_id=job_id,
                 base_model_id=meta.get("base_model_id"),
                 gcs_prefix=prefix,
                 use_unsloth=meta.get("use_unsloth", False),
                 local_dir=local_dir,
+                export_format=meta.get("export_format", export_format),
+                quantization=meta.get("quantization"),
+                hf_repo_id=meta.get("hf_repo_id"),
             )
             return metadata
         except Exception as e:
@@ -226,6 +261,22 @@ class CloudStorageService:
 
         return train_dataset, eval_dataset
 
+    def _get_format_prefix(self, export_format: Optional[str]) -> str:
+        """
+        Get the folder prefix based on export format.
+
+        Returns:
+            str: Folder prefix for storing the model artifacts
+        """
+        format_mapping = {
+            "adapter": "trained_adapters",
+            "merged": "merged_models",
+            "gguf": "gguf_models",
+        }
+        return format_mapping.get(
+            export_format, "adapters"
+        )  # Default to adapters for backwards compatibility
+
 
 @dataclass
 class ModelArtifact:
@@ -253,18 +304,13 @@ class ModelStorageStrategy(ABC):
 
     @abstractmethod
     def save_model(
-        self, model, tokenizer, local_path: str, metadata: Dict[str, Any]
+        self, local_path: str, metadata: CloudStoredModelMetadata
     ) -> ModelArtifact:
         """
-        Save model artifacts and return artifact reference.
-
-        Persists the trained model and tokenizer to the storage backend and returns
-        a ModelArtifact containing metadata and paths for later retrieval.
+        Upload model artifacts from local path to storage backend.
 
         Args:
-            model: The trained model (can be a trainer, model, or adapter)
-            tokenizer: The tokenizer associated with the model
-            local_path: Local directory path for temporary storage
+            local_path: Local directory containing saved model files
             metadata: Dictionary containing job_id, base_model_id, and storage-specific config
 
         Returns:
@@ -307,58 +353,39 @@ class GCSStorageStrategy(ModelStorageStrategy):
         self.storage_service: CloudStorageService = storage_service
 
     def save_model(
-        self, model, tokenizer, local_path: str, metadata: Dict[str, Any]
+        self, local_path: str, metadata: CloudStoredModelMetadata
     ) -> ModelArtifact:
         """
-        Save model to GCS and return artifact reference.
-
-        First saves the model locally, then uploads all artifacts to the configured
-        GCS export bucket under a job-specific prefix. Handles both trainer objects
-        and direct model instances.
+        Upload model artifacts from local path to GCS.
 
         Args:
-            model: Trained model or trainer instance
-            tokenizer: Associated tokenizer
-            local_path: Temporary local directory for staging files
+            local_path: Local directory containing saved model files
             metadata: Must contain job_id, base_model_id, and optional use_unsloth flag
 
         Returns:
             ModelArtifact: Reference to the uploaded model with GCS paths
         """
-        # Use existing storage service logic
-        # CloudStoredModelMetadata is already defined in this module
-
-        cloud_metadata = CloudStoredModelMetadata(
-            job_id=metadata["job_id"],
-            base_model_id=metadata["base_model_id"],
-            gcs_prefix=f"trained_adapters/{metadata['job_id']}",
-            use_unsloth=metadata.get("use_unsloth", False),
-            local_dir=local_path,
-        )
-
-        # Save model locally first
-        if hasattr(model, "save_pretrained"):
-            model.save_pretrained(local_path)
-        else:
-            # For trainers
-            model.save_model(local_path)
-        tokenizer.save_pretrained(local_path)
-
-        # Upload to GCS
-        remote_path = self.storage_service.upload_model(local_path, cloud_metadata)
+        # Upload to GCS (model is already saved locally by utils.py)
+        remote_path = self.storage_service.upload_model(local_path, metadata)
 
         return ModelArtifact(
-            base_model_id=metadata["base_model_id"],
-            job_id=metadata["job_id"],
+            base_model_id=metadata.base_model_id,
+            job_id=metadata.job_id,
             local_path=local_path,
             remote_path=remote_path,
-            use_unsloth=metadata.get("use_unsloth", False),
-            metadata=metadata,
+            use_unsloth=metadata.use_unsloth,
+            metadata={
+                "export_format": metadata.export_format,
+                "quantization": metadata.quantization,
+                "gcs_prefix": metadata.gcs_prefix,
+            },
         )
 
-    def load_model_info(self, job_id: str) -> ModelArtifact:
-        """Load model from GCS"""
-        meta = self.storage_service.download_model(job_id)
+    def load_model_info(
+        self, job_id: str, export_format: str = "adapter"
+    ) -> ModelArtifact:
+        """Load model from GCS with format-specific folder structure"""
+        meta = self.storage_service.download_model(job_id, export_format)
 
         return ModelArtifact(
             base_model_id=meta.base_model_id,
@@ -366,7 +393,11 @@ class GCSStorageStrategy(ModelStorageStrategy):
             local_path=meta.local_dir or "",
             remote_path=f"gs://{self.storage_service.export_bucket}/{meta.gcs_prefix}/",
             use_unsloth=meta.use_unsloth,
-            metadata={"gcs_prefix": meta.gcs_prefix},
+            metadata={
+                "gcs_prefix": meta.gcs_prefix,
+                "export_format": meta.export_format,
+                "quantization": meta.quantization,
+            },
         )
 
     def cleanup(self, artifact: ModelArtifact) -> None:
@@ -390,35 +421,33 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
         pass
 
     def save_model(
-        self, model, tokenizer, local_path: str, metadata: Dict[str, Any]
+        self, local_path: str, metadata: CloudStoredModelMetadata
     ) -> ModelArtifact:
         """
-        Push model to HuggingFace Hub
-        NOTE: DO NOT PASS IN TRAINER OBJECT FOR `model` PARAMETER! It has different kwargs requirements.
+        Upload all files in local directory to HuggingFace Hub repository.
+        Much more efficient than loading and re-pushing models.
         """
-        hf_repo_id = metadata["hf_repo_id"]
+        hf_repo_id = metadata.hf_repo_id
+        logging.info(f"Uploading folder {local_path} to HuggingFace Hub: {hf_repo_id}")
 
-        # Push to HuggingFace Hub
-        logging.info(f"Pushing model to Hugging Face Hub at {hf_repo_id}")
-
-        # Direct model push (for Unsloth/base models)
-        # NOTE: This is mainly because sometimes it has "SFTTrainer.create_model_card() got an unexpected keyword argument 'private'" error
         try:
-            model.push_to_hub(hf_repo_id, private=True)
-            tokenizer.push_to_hub(hf_repo_id, private=True)
-        except Exception as e:
-            logging.error(
-                f"Failed to push model to HuggingFace Hub: {str(e)}, trying again with public repo"
+            api = HfApi()
+            api.upload_folder(
+                folder_path=local_path,
+                repo_id=hf_repo_id,
+                repo_type="model",
+                private=True,
             )
-            model.push_to_hub(hf_repo_id)
-            tokenizer.push_to_hub(hf_repo_id)
+        except Exception as e:
+            logging.error(f"Failed to upload folder to HuggingFace Hub: {e}")
+            raise
 
         return ModelArtifact(
-            base_model_id=metadata["base_model_id"],
-            job_id=metadata["job_id"],
+            base_model_id=metadata.base_model_id,
+            job_id=metadata.job_id,
             local_path=local_path,
             remote_path=hf_repo_id,
-            use_unsloth=metadata.get("use_unsloth", False),
+            use_unsloth=metadata.use_unsloth,
             metadata={"hf_repo_id": hf_repo_id},
         )
 
@@ -436,8 +465,6 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
         Returns:
             ModelArtifact: Model metadata for inference setup
         """
-        from huggingface_hub import hf_hub_download
-
         try:
             # Try adapter config first
             adapter_config_path = hf_hub_download(

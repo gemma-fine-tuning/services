@@ -3,7 +3,7 @@ import json
 import sys
 from google.cloud import firestore
 from google.cloud import storage
-from training_service import TrainingService
+from providers import TrainingService
 from job_manager import JobStateManager, JobTracker
 from schema import TrainRequest
 from huggingface_hub import login
