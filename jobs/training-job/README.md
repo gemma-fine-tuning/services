@@ -5,7 +5,8 @@ Cloud Run job that executes fine-tuning on Gemma models.
 ## Structure
 
 - **`main.py`** - Job entry point, loads config and starts training
-- **`training_service.py`** - Core training logic with provider support
+- **`base.py`** - Base class for training jobs with common workflow / functionality
+- **`providers.py`** - Core training logic with provider support
 - **`job_manager.py`** - Job state tracking and Firestore integration
 - **`storage.py`** - Model and dataset saving/loading from GCS/HF Hub
 - **`schema.py`** - Training configuration models
@@ -17,7 +18,7 @@ gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
 ```
 
 - Cloud Run job with GPU support (L4)
-- Memory: 16Gi, CPU: 4 cores
+- Memory: 32Gi, CPU: 8 cores
 - GPU: 1x NVIDIA L4
 
 ## Execution Flow
@@ -60,9 +61,15 @@ gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
     "base_model_id": "google/gemma-2b",
     "learning_rate": 0.0001,
     "batch_size": 4,
-    "epochs": 3
+    "epochs": 3,
+    "eval_strategy": "epoch",
+    "evaluation_metrics": ["accuracy", "perplexity"]
   },
-  "export": "gcs"
+  "export_config": {
+    "format": "merged",
+    "quantization": "fp16",
+    "destination": "gcs"
+  }
 }
 ```
 
@@ -71,3 +78,7 @@ gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
 - **Weights & Biases**: Training metrics and model logging
 - **Firestore**: Job status tracking
 - **Cloud Logging**: Execution logs
+
+## Export and Evaluation
+
+Refer to the README.md in `training/`
