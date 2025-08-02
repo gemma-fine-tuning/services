@@ -2,6 +2,33 @@ from pydantic import BaseModel
 from typing import Literal, Optional, List
 
 
+class ExportConfig(BaseModel):
+    """Configuration for model export"""
+
+    format: Literal["adapter", "merged", "gguf"] = "adapter"
+    quantization: Optional[
+        Literal[
+            # For merged models
+            "none",
+            "fp16",
+            # "q8",
+            "q4",
+            # TODO: For now we don't check this we assume the frontend is aware of valid config
+            # for GGUF format (Unsloth)
+            "f16",
+            "not_quantized",
+            "fast_quantized",
+            "quantized",
+            "q8_0",
+            "q4_k_m",  # recommended for Unsloth
+            "q5_k_m",  # recommended for Unsloth
+            "q2_k",
+        ]
+    ] = "none"
+    destination: Literal["gcs", "hfhub"] = "gcs"
+    hf_repo_id: Optional[str] = None
+
+
 class EvaluationMetrics(BaseModel):
     """
     Evaluation metrics structure to hold results after training.
@@ -55,15 +82,6 @@ class WandbConfig(BaseModel):
     # project is defaulted to "huggingface" if not provided
     project: Optional[str] = None
     log_model: Optional[Literal["false", "checkpoint", "end"]] = "end"
-
-
-class ExportConfig(BaseModel):
-    """Configuration for model export"""
-
-    format: Literal["merged", "gguf", "adapter"] = "adapter"
-    quantization: Optional[Literal["none", "int8", "fp16"]] = None
-    destination: Literal["gcs", "hfhub"] = "gcs"
-    hf_repo_id: Optional[str] = None
 
 
 class TrainRequest(BaseModel):

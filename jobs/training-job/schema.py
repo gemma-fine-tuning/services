@@ -52,8 +52,27 @@ class WandbConfig(BaseModel):
 class ExportConfig(BaseModel):
     """Configuration for model export"""
 
-    format: Literal["merged", "gguf", "adapter"] = "adapter"
-    quantization: Optional[Literal["none", "int8", "fp16"]] = None
+    format: Literal["adapter", "merged", "gguf"] = "adapter"
+    quantization: Optional[
+        Literal[
+            # For merged models
+            "none",
+            "fp16",
+            # q4 and q8 referes to fp4 and int8, this makes it consistent with GGUF
+            # "q8",  # NOTE: not yet explicitly supported
+            "q4",
+            # TODO: For now we don't check this we assume the frontend is aware of valid config
+            # for GGUF format (Unsloth)
+            "f16",
+            "not_quantized",
+            "fast_quantized",
+            "quantized",
+            "q8_0",
+            "q4_k_m",  # recommended for Unsloth
+            "q5_k_m",  # recommended for Unsloth
+            "q2_k",
+        ]
+    ] = "none"
     destination: Literal["gcs", "hfhub"] = "gcs"
     hf_repo_id: Optional[str] = None
 
