@@ -81,6 +81,7 @@ class TrainRequest(BaseModel):
     # This struct is shared between the API and the backend service
     processed_dataset_id: str
     hf_token: str
+    job_name: str = "unnamed job"
     training_config: TrainingConfig
     export_config: ExportConfig
 

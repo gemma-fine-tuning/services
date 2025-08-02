@@ -91,7 +91,10 @@ async def start_training(request: TrainRequest):
     base_model_id = request.training_config.base_model_id
     job_id = make_job_id(processed_dataset_id, base_model_id, request)
 
-    if request.export == "hfhub" and not request.hf_repo_id:
+    if (
+        request.export_config.destination == "hfhub"
+        and not request.export_config.hf_repo_id
+    ):
         raise HTTPException(
             status_code=400,
             detail="hf_repo_id is required when export is hfhub",
