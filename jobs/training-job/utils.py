@@ -7,6 +7,7 @@ from storage import StorageStrategyFactory, CloudStoredModelMetadata
 from job_manager import JobTracker
 from schema import ExportConfig
 import os
+import shutil
 
 
 def run_evaluation(trainer):
@@ -93,6 +94,7 @@ def _prepare_unsloth_export(
     elif export_config.format == "gguf":
         # Use Unsloth's native GGUF export
         # https://docs.unsloth.ai/basics/running-and-saving-models/saving-to-gguf
+        # NOTE: This does not yet work will be fixed sooon by unsloth team
         logging.info(
             f"Saving Unsloth GGUF with quantization: {export_config.quantization}"
         )
@@ -177,19 +179,14 @@ def save_and_track(
     use_unsloth: bool,
     job_tracker: JobTracker,
     metrics: dict | None = None,
-    tmp_prefix: str = "adapter",
 ):
     """
     Save the model using storage strategy, cleanup, and mark job as completed.
-    Now includes proper export format handling (adapter, merged, gguf) with quantization.
+    Saves the model in the format specified by export_config (adapter, merged, or gguf).
+    The inference service will handle both adapter and merged models automatically.
     """
     # Determine temp directory based on export format
-    if export_config.format == "gguf":
-        tmp_prefix = f"{tmp_prefix}_gguf"
-    elif export_config.format == "merged":
-        tmp_prefix = f"{tmp_prefix}_merged"
-
-    temp_dir = f"/tmp/{job_id}_{tmp_prefix}"
+    temp_dir = f"/tmp/{job_id}_{export_config.format}"
 
     try:
         # Prepare model for export based on configuration
@@ -226,8 +223,6 @@ def save_and_track(
     except Exception as e:
         logging.error(f"Error during model export: {e}")
         # Clean up temp directory on error
-        import shutil
-
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
         raise
@@ -266,6 +261,12 @@ def create_compute_metrics(
         Compute evaluation metrics using the evaluate library (regular mode).
         """
         logits, labels = eval_pred
+        if (
+            isinstance(logits, tuple)
+            and hasattr(logits[0], "shape")
+            and logits[0].shape == (0,)
+        ):
+            return {}
         predictions = np.argmax(logits, axis=-1)
         results = {}
 

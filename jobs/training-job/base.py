@@ -108,9 +108,6 @@ class BaseTrainingService(ABC):
         metrics: Optional[Dict[str, Any]],
         req: TrainRequest,
     ) -> Any:
-        # derive file prefix from modality
-        prefix = "hf_vision" if req.training_config.modality == "vision" else "adapter"
-
         return save_and_track(
             req.export_config,
             model,
@@ -120,7 +117,6 @@ class BaseTrainingService(ABC):
             req.training_config.provider == "unsloth",
             tracker,
             metrics,
-            tmp_prefix=prefix,
         )
 
     def _setup_wandb(

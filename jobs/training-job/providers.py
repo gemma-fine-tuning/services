@@ -304,6 +304,7 @@ class UnslothTrainingService(BaseTrainingService):
         from unsloth.trainer import UnslothVisionDataCollator
         from unsloth import FastModel, FastVisionModel
         from unsloth.chat_templates import (
+            get_chat_template,
             standardize_data_formats,
             train_on_responses_only,
         )
@@ -311,6 +312,7 @@ class UnslothTrainingService(BaseTrainingService):
 
         self.FastModel = FastModel
         self.FastVisionModel = FastVisionModel
+        self.get_chat_template = get_chat_template
         self.standardize_data_formats = standardize_data_formats
         self.train_on_responses_only = train_on_responses_only
         self.UnslothVisionDataCollator = UnslothVisionDataCollator
@@ -356,10 +358,12 @@ class UnslothTrainingService(BaseTrainingService):
                 # NOTE: if you use unsloth you default to QLoRA lol
                 base_model_id,
                 load_in_4bit=True,
-                max_seq_length=cfg.max_seq_length or 2048,  # longer for vision models
+                max_seq_length=2048,  # From docs
                 full_finetuning=True if cfg.method == "Full" else False,
             )
-            tokenizer = processor.tokenizer
+            # Setup chat template for vision models
+            processor = self.get_chat_template(processor, "gemma-3")
+            return model, processor
         else:
             model, tokenizer = self.FastModel.from_pretrained(
                 base_model_id,
@@ -367,40 +371,69 @@ class UnslothTrainingService(BaseTrainingService):
                 max_seq_length=cfg.max_seq_length or 1024,
                 full_finetuning=True if cfg.method == "Full" else False,
             )
-
-        return model, tokenizer
+            # model = self.prepare_model_for_kbit_training(model)
+            # Setup chat template for text models
+            tokenizer = self.get_chat_template(tokenizer, "gemma-3")
+            return model, tokenizer
 
     def _prepare_dataset(
         self, train_ds: Any, eval_ds: Any, tokenizer: Any, cfg: TrainingConfig
     ) -> Tuple[Any, Any]:
         # Unsloth standardization for text; vision uses raw datasets
         if cfg.modality != "vision":
-            train = self.standardize_data_formats(train_ds)
+            train = self._prepare_unsloth_text_dataset(train_ds, tokenizer)
             eval = (
-                self.standardize_data_formats(eval_ds) if eval_ds is not None else None
+                self._prepare_unsloth_text_dataset(eval_ds, tokenizer)
+                if eval_ds is not None
+                else None
             )
             return train, eval
         else:
             return train_ds, eval_ds  # No standardization for vision datasets
 
     def _apply_peft_if_needed(self, model: Any, cfg: TrainingConfig) -> Any:
-        # Unsloth PEFT applied in model setup if needed
-        if cfg.method != "Full":
-            model = model.get_peft_model(
+        # Method is either full or PEFT (LoRA or QLoRA)
+        if cfg.method == "Full":
+            logging.warning("No PEFT applied, using full model")
+            return model
+
+        if cfg.modality == "vision":
+            model = self.FastVisionModel.get_peft_model(
                 model,
-                finetune_vision_layers=True if cfg.modality == "vision" else False,
-                finetune_language_layers=True if cfg.modality == "text" else False,
-                finetune_attention_modules=True if cfg.modality == "text" else False,
-                finetune_mlp_modules=True if cfg.modality == "text" else False,
-                r=cfg.lora_rank or 16,
-                lora_alpha=cfg.lora_alpha or 16,
-                lora_dropout=cfg.lora_dropout or 0.05,
+                finetune_vision_layers=True,
+                finetune_language_layers=True,
+                finetune_attention_modules=True,
+                finetune_mlp_modules=True,
+                r=cfg.lora_rank,
+                lora_alpha=cfg.lora_alpha,
+                lora_dropout=cfg.lora_dropout,
                 bias="none",
                 random_state=3407,
                 use_rslora=False,
                 loftq_config=None,
                 target_modules="all-linear",
                 modules_to_save=["lm_head", "embed_tokens"],
+            )
+        else:
+            model = self.FastModel.get_peft_model(
+                model,
+                # target_modules=[
+                #     "q_proj",
+                #     "k_proj",
+                #     "v_proj",
+                #     "o_proj",
+                #     "gate_proj",
+                #     "up_proj",
+                #     "down_proj",
+                # ],
+                r=cfg.lora_rank,
+                lora_alpha=cfg.lora_alpha,
+                lora_dropout=cfg.lora_dropout,
+                bias="none",
+                random_state=3407,
+                use_rslora=False,
+                loftq_config=None,
+                target_modules="all-linear",
             )
 
         return model
@@ -411,7 +444,7 @@ class UnslothTrainingService(BaseTrainingService):
         # Build Unsloth training args
         args = self.SFTConfig(
             output_dir=f"/tmp/{job_id}",
-            dataset_text_field="text",
+            dataset_text_field="text" if cfg.modality == "text" else "",
             per_device_train_batch_size=cfg.batch_size,
             per_device_eval_batch_size=cfg.batch_size,
             gradient_accumulation_steps=cfg.gradient_accumulation_steps,
@@ -440,13 +473,14 @@ class UnslothTrainingService(BaseTrainingService):
             args.remove_unused_columns = False
             args.dataset_kwargs = {}
             args.dataset_num_proc = 1
+            args.max_length = 2048
 
         return args
 
     def _create_trainer(
         self,
         model: Any,
-        tokenizer: Any,
+        tokenizer_or_processor: Any,
         train_ds: Any,
         eval_ds: Any,
         args: Any,
@@ -457,9 +491,12 @@ class UnslothTrainingService(BaseTrainingService):
             args=args,
             train_dataset=train_ds,
             eval_dataset=eval_ds,
-            processing_class=tokenizer,
+            processing_class=tokenizer_or_processor
+            if cfg.modality == "text"
+            else tokenizer_or_processor.tokenizer,  # for AutoProcessor
             data_collator=(
-                self.UnslothVisionDataCollator(model, tokenizer)
+                # if modality is vision this is processor
+                self.UnslothVisionDataCollator(model, tokenizer_or_processor)
                 if cfg.modality == "vision"
                 else None
             ),
@@ -477,6 +514,41 @@ class UnslothTrainingService(BaseTrainingService):
             )
 
         return trainer
+
+    def _prepare_unsloth_text_dataset(self, dataset: Any, tokenizer: Any) -> Any:
+        """
+        Prepare dataset for Unsloth text training format.
+        Standardizes and formats the dataset with text field for Unsloth SFTTrainer.
+
+        NOTE: Adds the "text" field only to text datasets because it is specified, otherwise we need to pass in a formatting func
+        This is not required for vision.
+        """
+        # Standardize format first
+        dataset = self.standardize_data_formats(dataset)
+
+        def formatting_prompts_func(examples):
+            # examples["messages"] is a batch of message arrays -> we expect this to be well formatted in preprocessing
+            # each convo is a list of message dicts: [{"role": "user", "content": "..."}, ...]
+            # Handle both "messages" and "conversations" field names for compatibility
+            if "messages" in examples:
+                convos = examples["messages"]
+            elif "conversations" in examples:
+                convos = examples["conversations"]
+            else:
+                raise ValueError(
+                    "Dataset must contain 'messages' or 'conversations' field"
+                )
+
+            texts = [
+                tokenizer.apply_chat_template(
+                    convo, tokenize=False, add_generation_prompt=False
+                ).removeprefix("<bos>")
+                for convo in convos
+            ]
+            return {"text": texts}
+
+        dataset = dataset.map(formatting_prompts_func, batched=True)
+        return dataset
 
 
 class TrainingService:

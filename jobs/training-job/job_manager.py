@@ -29,7 +29,7 @@ class JobStateManager:
             project_id: Google Cloud project ID
             collection_name: Name of the Firestore collection for jobs
         """
-        self.db = firestore.Client(project_id=project_id)
+        self.db = firestore.Client(project=project_id)
         self.collection = self.db.collection(collection_name)
         self.logger = logging.getLogger(__name__)
 
