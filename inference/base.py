@@ -4,7 +4,7 @@ import torch
 from typing import List
 
 from storage import StorageStrategyFactory
-from utils import infer_modality_from_messages
+from utils import infer_modality_from_messages, infer_storage_type_from_path
 
 logger = logging.getLogger(__name__)
 
@@ -32,63 +32,57 @@ class InferenceOrchestrator:
             "unsloth": UnslothInferenceProvider(),
         }
 
-    def run_inference(
-        self, job_id_or_repo_id: str, prompt: str, storage_type: str = "gcs"
-    ) -> str:
+    def run_inference(self, adapter_path: str, base_model_id: str, prompt: str) -> str:
         """
-        Fetch adapter artifacts, run generation, and return output text.
-        Handles model loading, prompt formatting, and output postprocessing.
+        Run inference with the given adapter and base model.
 
         Args:
-            job_id_or_repo_id (str): Job ID for GCS or HF Hub repository ID
+            adapter_path (str): Path to adapter (local, GCS, or HF Hub repo ID)
+            base_model_id (str): Base model identifier
             prompt (str): Input text to generate a response for
-            storage_type (str): Either "gcs" or "hfhub" to specify storage backend
 
         Returns:
             str: Generated text response from the model
-
-        Raises:
-            FileNotFoundError: If adapter artifacts or config are missing
-            ValueError: If base model ID is not found in adapter config
         """
         return self.run_batch_inference(
-            job_id_or_repo_id, [[{"role": "user", "content": prompt}]], storage_type
+            adapter_path, base_model_id, [[{"role": "user", "content": prompt}]]
         )[0]
 
     def run_batch_inference(
-        self, job_id_or_repo_id: str, messages: List, storage_type: str = "gcs"
+        self, adapter_path: str, base_model_id: str, messages: List
     ) -> List[str]:
         """
-        Fetch adapter artifacts, run generation for a batch of messages, and return output texts.
-        Handles model loading, prompt formatting, and output postprocessing for a batch.
+        Run generation for a batch of messages with the given adapter and base model.
 
         Args:
-            job_id_or_repo_id (str): Job ID for GCS or HF Hub repository ID
+            adapter_path (str): Path to adapter (local, GCS, or HF Hub repo ID)
+            base_model_id (str): Base model identifier
             messages (list): List of input message conversations to generate responses for
-            storage_type (str): Either "gcs" or "hfhub" to specify storage backend
 
         Returns:
             list[str]: List of generated text responses from the model
-
-        NOTE: Streaming with TextStreamer has been removed because we believe it will never be used
-        for this use case and batch inference is much more suitable. However, if needed just add back
-        by setting a TextStreamer object in model.generate() call
         """
-        logger.info(f"Starting batch inference for {job_id_or_repo_id}...")
+        logger.info(f"Starting batch inference for adapter: {adapter_path}")
         start_time = time.time()
 
-        # Load model artifact info
-        strategy = StorageStrategyFactory.create_strategy(storage_type)
-        artifact = strategy.load_model_info(job_id_or_repo_id)
+        # Determine storage type and handle model loading
+        storage_type = infer_storage_type_from_path(adapter_path)
 
-        base_model_id = artifact.base_model_id
-        adapter_path = (
-            artifact.local_path if storage_type == "gcs" else artifact.remote_path
-        )
-        use_unsloth = artifact.use_unsloth
-
-        if not base_model_id:
-            raise ValueError("Base model ID not found in adapter config")
+        if storage_type == "local":
+            raise ValueError(
+                "local inference is not yet supported, provide adapter path from gcs or hf hub"
+            )
+        else:
+            # Need to use storage strategy for GCS or handle HF Hub
+            strategy = StorageStrategyFactory.create_strategy(storage_type)
+            if storage_type == "gcs":
+                artifact = strategy.load_model_info(adapter_path)
+                final_adapter_path = artifact.local_path
+                use_unsloth = artifact.use_unsloth
+            else:  # hfhub
+                artifact = strategy.load_model_info(adapter_path)
+                final_adapter_path = artifact.remote_path
+                use_unsloth = artifact.use_unsloth
 
         # Determine modality and provider
         modality = infer_modality_from_messages(messages)
@@ -97,18 +91,19 @@ class InferenceOrchestrator:
 
         try:
             outputs = provider.run_batch_inference(
-                base_model_id, adapter_path, messages, modality
+                base_model_id, final_adapter_path, messages, modality
             )
         except Exception as e:
             logger.error(f"Batch inference failed with error: {str(e)}", exc_info=True)
             raise e
         finally:
-            strategy.cleanup(artifact)
+            if artifact:
+                strategy.cleanup(artifact)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
         logger.info(
-            f"Batch inference for {job_id_or_repo_id} completed in {time.time() - start_time:.2f} seconds."
+            f"Batch inference for {adapter_path} completed in {time.time() - start_time:.2f} seconds."
         )
         return outputs
 
@@ -117,42 +112,37 @@ class InferenceOrchestrator:
 inference_orchestrator = InferenceOrchestrator()
 
 
-def run_inference(
-    job_id_or_repo_id: str, prompt: str, storage_type: str = "gcs"
-) -> str:
+def run_inference(adapter_path: str, base_model_id: str, prompt: str) -> str:
     """
     Convenience function for running inference with different storage backends.
     **This is just a wrapper around the batch inference function!**
 
     Args:
-        job_id_or_repo_id (str): Job ID for GCS or HF Hub repository ID
+        adapter_path (str): Path to adapter (local, GCS, or HF Hub repo ID)
+        base_model_id (str): Base model identifier
         prompt (str): Input text to generate a response for
-        storage_type (str): Either "gcs" or "hfhub" to specify storage backend
 
     Returns:
         str: Generated text response from the model
     """
-    return inference_orchestrator.run_inference(job_id_or_repo_id, prompt, storage_type)
+    return inference_orchestrator.run_inference(adapter_path, base_model_id, prompt)
 
 
 def run_batch_inference(
-    job_id_or_repo_id: str, messages: List, storage_type: str = "gcs"
+    adapter_path: str, base_model_id: str, messages: List
 ) -> List[str]:
     """
     Convenience function for running batch inference with different storage backends.
     Handles model loading and output generation for both GCS and HF Hub.
 
     Args:
-        job_id_or_repo_id (str): Job ID for GCS or HF Hub repository ID
-            - If storage_type is "gcs", this is the job ID
-            - If storage_type is "hfhub", this is the Hugging Face repository ID
-            - The frontend would determine this automatically
+        adapter_path (str): Path to adapter (local, GCS, or HF Hub repo ID)
+        base_model_id (str): Base model identifier
         messages (list): List of input texts or formatted messages to generate responses for
-        storage_type (str): Either "gcs" or "hfhub" to specify storage backend
 
     Returns:
         list[str]: List of generated text responses from the model
     """
     return inference_orchestrator.run_batch_inference(
-        job_id_or_repo_id, messages, storage_type
+        adapter_path, base_model_id, messages
     )

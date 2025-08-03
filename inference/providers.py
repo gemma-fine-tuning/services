@@ -26,6 +26,7 @@ class BaseInferenceProvider(ABC):
         Args:
             base_model_id: Base model identifier
             adapter_path: Path to adapter (local or remote)
+                NOTE: This can either be an adapter or merged model, the logic is handled by provider itself
             messages: List of message conversations
             modality: Either "text" or "vision"
 
@@ -70,14 +71,17 @@ class HuggingFaceInferenceProvider(BaseInferenceProvider):
 
         # Model configuration
         model_kwargs = get_model_device_config()
-        model_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True)
+        model_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+        )
 
         # Load appropriate model class based on base model
         if base_model_id in ["google/gemma-3-1b-it", "google/gemma-3-1b-pt"]:
+            # This can direclty load adapter AND merged model, no need PEFT to load adapters explicitly
             model = AutoModelForCausalLM.from_pretrained(adapter_path, **model_kwargs)
         else:
-            # AutoModelForImageTextToText is still used for text-only models!
-            # The only determining factor is whether the base_model_id is a vision model or not
             model = AutoModelForImageTextToText.from_pretrained(
                 adapter_path, **model_kwargs
             )
@@ -129,7 +133,12 @@ class HuggingFaceInferenceProvider(BaseInferenceProvider):
         from transformers.utils.quantization_config import BitsAndBytesConfig
 
         model_kwargs = get_model_device_config()
-        model_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True)
+        # TODO: Is it necessary to set BnB quant config here?? or is it saved somehow already?
+        model_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+        )
 
         model = AutoModelForImageTextToText.from_pretrained(
             adapter_path, **model_kwargs

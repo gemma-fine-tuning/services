@@ -50,20 +50,17 @@ def login_hf(hf_token: Optional[str]):
 @app.post("/inference", response_model=InferenceResponse)
 async def inference(request: InferenceRequest):
     """Run inference using a trained adapter"""
-    prompt = request.prompt
-    job_id_or_repo_id = request.job_id_or_repo_id
-    if not prompt:
-        raise HTTPException(status_code=400, detail="prompt is required")
-    if not job_id_or_repo_id:
-        raise HTTPException(status_code=400, detail="job_id_or_repo_id is required")
     try:
         login_hf(request.hf_token)
         output = await run_in_threadpool(
-            run_inference, job_id_or_repo_id, prompt, request.storage_type
+            run_inference,
+            request.adapter_path,
+            request.base_model_id,
+            request.prompt,
         )
         return {"result": output}
     except FileNotFoundError:
-        logging.error(f"Adapter {job_id_or_repo_id} not found")
+        logging.error(f"Adapter {request.adapter_path} not found")
         raise HTTPException(status_code=404, detail="Adapter not found")
     except Exception as e:
         logging.error(f"Inference failed with error: {str(e)}", exc_info=True)
@@ -74,19 +71,19 @@ async def inference(request: InferenceRequest):
 async def batch_inference(request: BatchInferenceRequest):
     """Run batch inference using a trained adapter"""
     messages = request.messages
-    job_id_or_repo_id = request.job_id_or_repo_id
     if not messages or not isinstance(messages, list) or len(messages) == 0:
         raise HTTPException(status_code=400, detail="messages (list) is required")
-    if not job_id_or_repo_id:
-        raise HTTPException(status_code=400, detail="job_id_or_repo_id is required")
     try:
         login_hf(request.hf_token)
         outputs = await run_in_threadpool(
-            run_batch_inference, job_id_or_repo_id, messages, request.storage_type
+            run_batch_inference,
+            request.adapter_path,
+            request.base_model_id,
+            messages,
         )
         return {"results": outputs}
     except FileNotFoundError:
-        logging.error(f"Adapter {job_id_or_repo_id} not found")
+        logging.error(f"Adapter {request.adapter_path} not found")
         raise HTTPException(status_code=404, detail="Adapter not found")
     except Exception as e:
         logging.error(f"Batch inference failed with error: {str(e)}", exc_info=True)

@@ -7,6 +7,30 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def infer_storage_type_from_path(adapter_path: str) -> str:
+    """
+    Infer storage type from adapter path.
+
+    Args:
+        adapter_path: Path to adapter (local, GCS, or HF Hub)
+
+    Returns:
+        str: Either "local", "gcs", or "hfhub"
+    """
+    if adapter_path.startswith("gs://"):
+        return "gcs"
+    elif (
+        "/" in adapter_path
+        and not adapter_path.startswith("/")
+        and not adapter_path.startswith("./")
+    ):
+        # Heuristic: if it contains "/" but doesn't start with "/" or "./" it's likely a HF Hub repo
+        return "hfhub"
+    else:
+        # Local path (absolute or relative)
+        return "local"
+
+
 def infer_modality_from_messages(messages: List) -> str:
     """
     Infer the modality (text or vision) from the messages.

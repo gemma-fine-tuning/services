@@ -1,13 +1,14 @@
 from pydantic import BaseModel
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List
 
 
 class InferenceRequest(BaseModel):
-    # HF Token must be provided for Gemma models
-    hf_token: str
-    # The user should specify this so we don't have to look it up
-    storage_type: Literal["gcs", "hfhub"]
-    job_id_or_repo_id: str
+    hf_token: str  # HF Token must be provided for Gemma models
+    # Path to the adapter (can be local path, GCS path, or HF Hub repo ID)
+    adapter_path: str
+    # Base model ID to use for tokenizer and model class selection
+    base_model_id: str
+    # A single text message
     prompt: str
 
 
@@ -17,8 +18,10 @@ class InferenceResponse(BaseModel):
 
 class BatchInferenceRequest(BaseModel):
     hf_token: str
-    storage_type: Literal["gcs", "hfhub"]
-    job_id_or_repo_id: str
+    # Path to the adapter (can be local path, GCS path, or HF Hub repo ID)
+    adapter_path: str
+    # Base model ID to use for tokenizer and model class selection
+    base_model_id: str
     # A list of conversations, where each conversation is a list of messages
     messages: List[List[Dict[str, Any]]]
 

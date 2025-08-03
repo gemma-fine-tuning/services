@@ -78,13 +78,13 @@ class CloudStorageService:
         return f"gs://{self.export_bucket}/{prefix}/"
 
     def download_model(
-        self, job_id: str, local_dir: Optional[str] = None
+        self, path: str, local_dir: Optional[str] = None
     ) -> CloudStoredModelMetadata:
         """
-        Download model artifacts and metadata from cloud storage into a local dir
+        Download model artifacts and metadata from cloud storage into a local dir.
 
         Args:
-            job_id (str): Unique identifier for the training job
+            path (str): GCS path pointing to the model / adapter, with prefix merged_models or trained_adapters
             local_dir (Optional[str]): Local directory to download artifacts to.
                                        If None, uses a temporary directory.
 
@@ -92,17 +92,19 @@ class CloudStorageService:
             CloudStoredModelMetadata: Metadata object with job details and local path
         """
         bucket = self.storage_client.bucket(self.export_bucket)
-        prefix = f"trained_adapters/{job_id}"
-
-        # fetch metadata
-        config_blob = bucket.blob(f"{prefix}/config.json")
-        if not config_blob.exists():
-            raise FileNotFoundError("Adapter config not found")
-        meta = json.loads(config_blob.download_as_text())
+        # Path is "gs://{self.export_bucket}/{prefix}/", this split gives prefix
+        prefix = path.split("/")[-2]
+        model_blob = bucket.blob(f"{prefix}/config.json")
+        if model_blob.exists():
+            meta = json.loads(model_blob.download_as_text())
+        else:
+            raise FileNotFoundError(
+                f"Model config not found for job at location {path}"
+            )
 
         # prepare local directory
         if not local_dir:
-            local_dir = f"/tmp/inference_{job_id}"
+            local_dir = f"/tmp/inference_{meta.get('job_id', 'job_without_id')}"
         os.makedirs(local_dir, exist_ok=True)
 
         # download all artifacts
@@ -116,7 +118,7 @@ class CloudStorageService:
 
         # build metadata object
         metadata = CloudStoredModelMetadata(
-            job_id=job_id,
+            job_id=meta.get("job_id"),
             base_model_id=meta.get("base_model_id"),
             gcs_prefix=prefix,
             use_unsloth=meta.get("use_unsloth", False),
@@ -299,9 +301,9 @@ class GCSStorageStrategy(ModelStorageStrategy):
             metadata=metadata,
         )
 
-    def load_model_info(self, job_id: str) -> ModelArtifact:
+    def load_model_info(self, adapter_path: str) -> ModelArtifact:
         """Load model from GCS"""
-        meta = self.storage_service.download_model(job_id)
+        meta = self.storage_service.download_model(adapter_path)
 
         return ModelArtifact(
             base_model_id=meta.base_model_id,
