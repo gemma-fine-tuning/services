@@ -291,28 +291,6 @@ wheels = [
 ]
 
 [[package]]
-name = "evaluate"
-version = "0.4.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "datasets" },
-    { name = "dill" },
-    { name = "fsspec", extra = ["http"] },
-    { name = "huggingface-hub" },
-    { name = "multiprocess" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "pandas" },
-    { name = "requests" },
-    { name = "tqdm" },
-    { name = "xxhash" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5a/a0/10a56e0939ece94c54276e81459cb4101f46f0e9a6f54fc31a35f64e8854/evaluate-0.4.3.tar.gz", hash = "sha256:3a5700cf83aabee9549264e1e5666f116367c61dbd4d38352015e859a5e2098d", size = 65679, upload_time = "2024-09-11T10:15:32Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a2/e7/cbca9e2d2590eb9b5aa8f7ebabe1beb1498f9462d2ecede5c9fd9735faaf/evaluate-0.4.3-py3-none-any.whl", hash = "sha256:47d8770bdea76e2c2ed0d40189273027d1a41ccea861bcc7ba12d30ec5d1e517", size = 84010, upload_time = "2024-09-11T10:15:30.018Z" },
-]
-
-[[package]]
 name = "fastapi"
 version = "0.104.1"
 source = { registry = "https://pypi.org/simple" }
@@ -418,7 +396,6 @@ dependencies = [
     { name = "accelerate" },
     { name = "bitsandbytes" },
     { name = "datasets" },
-    { name = "evaluate" },
     { name = "fastapi" },
     { name = "google-cloud-firestore" },
     { name = "google-cloud-storage" },
@@ -441,7 +418,6 @@ requires-dist = [
     { name = "accelerate", specifier = "==1.4.0" },
     { name = "bitsandbytes", specifier = "==0.45.3" },
     { name = "datasets", specifier = ">=3.4.1" },
-    { name = "evaluate", specifier = "==0.4.3" },
     { name = "fastapi", specifier = "==0.104.1" },
     { name = "google-cloud-firestore", specifier = ">=2.11.0" },
     { name = "google-cloud-storage", specifier = "==2.10.0" },

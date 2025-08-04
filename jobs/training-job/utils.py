@@ -1,8 +1,7 @@
 import logging
-import evaluate
+import torch
 from transformers import EvalPrediction
-import numpy as np
-from typing import List, Callable
+from typing import Callable
 from storage import StorageStrategyFactory, CloudStoredModelMetadata
 from job_manager import JobTracker
 from schema import ExportConfig
@@ -228,73 +227,65 @@ def save_and_track(
         raise
 
 
+def preprocess_logits_for_metrics(logits, labels):
+    # This is a workaround to avoid storing too many tensors that are not needed.
+    # This will preprocess the logits before they are cached for metrics computation
+    pred_ids = torch.argmax(logits, dim=-1)
+    return pred_ids, labels
+
+
 def create_compute_metrics(
-    selected_metrics: List[str] = None, use_batched_eval: bool = False
+    compute_eval_metrics: bool = False, use_batched_eval: bool = False
 ) -> Callable:
     """
-    Create a compute_metrics function with user-selected metrics using the evaluate library.
-    Supports: accuracy, perplexity, loss
-    Supports both regular and batch evaluation modes.
-    NOTE: This does not handle more complex evaluation like task specific evaluators.
+    Create a compute_metrics function for accuracy and perplexity computation.
+    Computes metrics manually without external dependencies.
 
     Args:
-        selected_metrics: List of metric names to compute (e.g., ["accuracy", "perplexity"])
+        compute_eval_metrics: If True, compute accuracy and perplexity
         use_batched_eval: If True, enables batch evaluation mode for metrics computation.
 
     Returns:
         A compute_metrics function for use with HuggingFace Trainer
     """
-    if selected_metrics is None:
-        selected_metrics = ["accuracy", "perplexity"]
-
-    # Load accuracy metric from evaluate library
-    # TODO: load other metrics similarly
-    accuracy_metric = None
-    if "accuracy" in selected_metrics:
-        try:
-            accuracy_metric = evaluate.load("accuracy")
-        except Exception as e:
-            logging.warning(f"Could not load accuracy metric: {e}")
+    if not compute_eval_metrics:
+        return None
 
     def compute_metrics(eval_pred: EvalPrediction) -> dict:
         """
-        Compute evaluation metrics using the evaluate library (regular mode).
+        Compute evaluation metrics manually (regular mode).
         """
-        logits, labels = eval_pred
-        if (
-            isinstance(logits, tuple)
-            and hasattr(logits[0], "shape")
-            and logits[0].shape == (0,)
-        ):
-            return {}
-        predictions = np.argmax(logits, axis=-1)
+        predictions, labels = eval_pred
         results = {}
 
+        # Get loss from eval_pred if available
         loss = (
             eval_pred.metrics.get("eval_loss", 0)
             if hasattr(eval_pred, "metrics")
             else 0
         )
-
         results["loss"] = loss
 
-        # Compute accuracy using evaluate library
-        if "accuracy" in selected_metrics and accuracy_metric is not None:
-            # Flatten and filter out ignored tokens (-100)
-            flat_predictions = predictions.flatten()
-            flat_labels = labels.flatten()
-            valid_mask = flat_labels != -100
-            valid_predictions = flat_predictions[valid_mask]
-            valid_labels = flat_labels[valid_mask]
+        # Flatten and filter out ignored tokens (-100)
+        flat_predictions = predictions.flatten()
+        flat_labels = labels.flatten()
+        valid_mask = flat_labels != -100
+        valid_predictions = flat_predictions[valid_mask]
+        valid_labels = flat_labels[valid_mask]
 
-            accuracy_result = accuracy_metric.compute(
-                predictions=valid_predictions, references=valid_labels
-            )
-            results["accuracy"] = accuracy_result["accuracy"]
+        # Compute accuracy manually
+        if len(valid_labels) > 0:
+            correct = (valid_predictions == valid_labels).sum()
+            accuracy = correct / len(valid_labels)
+            results["accuracy"] = float(accuracy)
+        else:
+            results["accuracy"] = 0.0
 
-        # Compute perplexity from eval_loss (if available)
-        if "perplexity" in selected_metrics:
-            results["perplexity"] = 2**loss
+        # Compute perplexity from loss
+        if loss > 0:
+            results["perplexity"] = float(2**loss)
+        else:
+            results["perplexity"] = 1.0
 
         return results
 
@@ -313,18 +304,18 @@ def create_compute_metrics(
         eval_pred: EvalPrediction, compute_result: bool = True
     ) -> dict:
         """
-        Compute evaluation metrics using the evaluate library (batch mode).
-        TODO: This does not yet use evaluate it simply tracks all the stat using a dict lol
+        Compute evaluation metrics in batch mode.
+        NOTE: If we ever use evaluate library in the future, the class of metric has an `add_batch`
+        method that we can use to accumulate batch statistics and then `compute` at the end.
 
         Args:
-            eval_pred: EvalPrediction containing logits and labels
+            eval_pred: EvalPrediction containing predictions and labels
             compute_result: If True, compute final results. If False, accumulate batch stats.
 
         Returns:
             Dictionary of computed metrics
         """
-        logits, labels = eval_pred
-        predictions = np.argmax(logits, axis=-1)
+        predictions, labels = eval_pred
 
         # If not computing final result, accumulate batch stats
         if not compute_result:
@@ -336,13 +327,13 @@ def create_compute_metrics(
             valid_labels = flat_labels[valid_mask]
 
             # Accumulate accuracy stats
-            if "accuracy" in selected_metrics:
+            if len(valid_labels) > 0:
                 correct = (valid_predictions == valid_labels).sum()
-                batch_stats["total_correct"] += correct
+                batch_stats["total_correct"] += int(correct)
                 batch_stats["total_samples"] += len(valid_labels)
 
             # Accumulate loss if available (for perplexity)
-            if "perplexity" in selected_metrics and hasattr(eval_pred, "metrics"):
+            if hasattr(eval_pred, "metrics"):
                 batch_loss = eval_pred.metrics.get("eval_loss", 0)
                 batch_stats["total_loss"] += batch_loss
                 batch_stats["batch_count"] += 1
@@ -353,19 +344,19 @@ def create_compute_metrics(
         # Compute final results from accumulated statistics
         results = {}
 
-        if "accuracy" in selected_metrics and batch_stats["total_samples"] > 0:
+        if batch_stats["total_samples"] > 0:
             accuracy = batch_stats["total_correct"] / batch_stats["total_samples"]
-            results["accuracy"] = accuracy
+            results["accuracy"] = float(accuracy)
+        else:
+            results["accuracy"] = 0.0
 
-        if "perplexity" in selected_metrics and batch_stats["batch_count"] > 0:
+        if batch_stats["batch_count"] > 0:
             avg_loss = batch_stats["total_loss"] / batch_stats["batch_count"]
-            results["perplexity"] = 2**avg_loss
-
-        results["loss"] = (
-            batch_stats["total_loss"] / batch_stats["batch_count"]
-            if batch_stats["batch_count"] > 0
-            else 0
-        )
+            results["perplexity"] = float(2**avg_loss)
+            results["loss"] = float(avg_loss)
+        else:
+            results["perplexity"] = 1.0
+            results["loss"] = 0.0
 
         # Reset batch stats for next evaluation
         batch_stats.update(

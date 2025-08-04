@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Literal, Optional, List
+from typing import Literal, Optional
 
 
 class TrainingConfig(BaseModel):
@@ -36,8 +36,9 @@ class TrainingConfig(BaseModel):
     eval_strategy: Optional[str] = "no"  # "no", "steps", "epoch"
     eval_steps: Optional[int] = 50  # Required if eval_strategy="steps"
 
-    # Metrics configuration
-    evaluation_metrics: Optional[List[str]] = ["accuracy", "perplexity"]
+    # Metrics configuration, otherwise eval only returns eval loss etc.
+    # if true returns computed metrics ["accuracy", "perplexity"]
+    compute_eval_metrics: Optional[bool] = False
     # Set to True to enable batch evaluation mode for metrics computation
     batch_eval_metrics: Optional[bool] = False
 

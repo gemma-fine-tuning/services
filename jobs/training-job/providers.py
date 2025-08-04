@@ -5,7 +5,7 @@ from typing import Any, Tuple
 
 from storage import storage_service
 from base import BaseTrainingService
-from utils import create_compute_metrics
+from utils import create_compute_metrics, preprocess_logits_for_metrics
 from schema import TrainingConfig
 
 
@@ -171,6 +171,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
             push_to_hub=False,
             logging_steps=cfg.logging_steps or 10,
             report_to=report_to,
+            batch_eval_metrics=cfg.batch_eval_metrics or False,
         )
 
         # Add eval_steps if using steps strategy
@@ -206,8 +207,11 @@ class HuggingFaceTrainingService(BaseTrainingService):
             if cfg.modality == "vision"
             else None,
             compute_metrics=create_compute_metrics(
-                cfg.evaluation_metrics, cfg.batch_eval_metrics
+                cfg.compute_eval_metrics, cfg.batch_eval_metrics
             ),
+            preprocess_logits_for_metrics=preprocess_logits_for_metrics
+            if cfg.compute_eval_metrics
+            else None,
         )
 
     def _create_vision_collate_fn(self, processor):
@@ -302,7 +306,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
 class UnslothTrainingService(BaseTrainingService):
     def __init__(self) -> None:
         from unsloth.trainer import UnslothVisionDataCollator
-        from unsloth import FastModel, FastVisionModel
+        from unsloth import FastModel, FastVisionModel, is_bfloat16_supported
         from unsloth.chat_templates import (
             get_chat_template,
             standardize_data_formats,
@@ -312,6 +316,7 @@ class UnslothTrainingService(BaseTrainingService):
 
         self.FastModel = FastModel
         self.FastVisionModel = FastVisionModel
+        self.is_bfloat16_supported = is_bfloat16_supported
         self.get_chat_template = get_chat_template
         self.standardize_data_formats = standardize_data_formats
         self.train_on_responses_only = train_on_responses_only
@@ -453,8 +458,8 @@ class UnslothTrainingService(BaseTrainingService):
             max_steps=cfg.max_steps or -1,
             learning_rate=cfg.learning_rate,
             packing=cfg.packing,
-            fp16=self.torch_dtype == torch.float16,
-            bf16=self.torch_dtype == torch.bfloat16,
+            fp16=not self.is_bfloat16_supported(),
+            bf16=self.is_bfloat16_supported(),
             optim="adamw_8bit",  # Unsloth default
             lr_scheduler_type=cfg.lr_scheduler_type or "linear",
             weight_decay=0.01,
@@ -462,6 +467,7 @@ class UnslothTrainingService(BaseTrainingService):
             eval_strategy=cfg.eval_strategy or "no",
             logging_steps=cfg.logging_steps or 10,
             report_to=report_to,
+            batch_eval_metrics=cfg.batch_eval_metrics or False,
         )
 
         # Add eval_steps if using steps strategy
@@ -501,8 +507,11 @@ class UnslothTrainingService(BaseTrainingService):
                 else None
             ),
             compute_metrics=create_compute_metrics(
-                cfg.evaluation_metrics, cfg.batch_eval_metrics
+                cfg.compute_eval_metrics, cfg.batch_eval_metrics
             ),
+            preprocess_logits_for_metrics=preprocess_logits_for_metrics
+            if cfg.compute_eval_metrics
+            else None,
         )
 
         # Apply response-only for text
