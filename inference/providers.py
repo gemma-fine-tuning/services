@@ -187,6 +187,7 @@ class UnslothInferenceProvider(BaseInferenceProvider):
         messages: List,
     ) -> List[str]:
         """Run text-based batch inference using Unsloth"""
+        import unsloth  # noqa: F401
         from unsloth import FastModel
         from unsloth.chat_templates import get_chat_template
 
@@ -230,6 +231,7 @@ class UnslothInferenceProvider(BaseInferenceProvider):
         messages: List,
     ) -> List[str]:
         """Run vision-based batch inference using Unsloth"""
+        import unsloth  # noqa: F401
         from unsloth import FastVisionModel
         from unsloth.chat_templates import get_chat_template
 

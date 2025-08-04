@@ -1,7 +1,11 @@
 import logging
 import time
 import torch
+import io
+import base64
 from typing import List, Dict, Any
+import numpy as np
+from PIL import Image
 
 from storage import StorageStrategyFactory
 from utils import infer_modality_from_messages, infer_storage_type_from_path
@@ -25,12 +29,105 @@ class InferenceOrchestrator:
     def _register_providers(self):
         """Lazy import and register inference providers"""
         # Import here to avoid circular imports
-        from providers import HuggingFaceInferenceProvider, UnslothInferenceProvider
+        from providers import (
+            BaseInferenceProvider,
+            HuggingFaceInferenceProvider,
+            UnslothInferenceProvider,
+        )
 
-        self.providers = {
+        self.providers: Dict[str, BaseInferenceProvider] = {
             "huggingface": HuggingFaceInferenceProvider(),
             "unsloth": UnslothInferenceProvider(),
         }
+
+    def _convert_messages_for_display(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert messages for display, handling image conversion to base64.
+        Similar to preprocessing service's convert_pil_to_base64 but focused on display.
+        """
+        converted_messages = []
+
+        for message in messages:
+            converted_message = {
+                "role": message.get("role"),
+                "content": self._convert_content_for_display(
+                    message.get("content", "")
+                ),
+            }
+            converted_messages.append(converted_message)
+
+        return converted_messages
+
+    def _convert_content_for_display(self, content):
+        """Convert content for display, handling both legacy and new formats."""
+        if isinstance(content, str):
+            # Legacy format - just return as is
+            return content
+        elif isinstance(content, list):
+            # New structured format
+            converted_content = []
+            for item in content:
+                if isinstance(item, dict):
+                    if item.get("type") == "text":
+                        converted_content.append(
+                            {"type": "text", "text": item.get("text", "")}
+                        )
+                    elif item.get("type") == "image":
+                        # Convert image to base64 for display
+                        converted_content.append(
+                            {
+                                "type": "image",
+                                "image": self._convert_image_to_base64(
+                                    item.get("image")
+                                ),
+                            }
+                        )
+                    else:
+                        converted_content.append(item)
+                else:
+                    converted_content.append(item)
+            return converted_content
+        else:
+            return content
+
+    def _convert_image_to_base64(self, img_data):
+        """Convert various image formats to base64 data URL."""
+        try:
+            # Case 1: PIL Images
+            if isinstance(img_data, Image.Image):
+                buf = io.BytesIO()
+                img_data.save(buf, format="PNG")
+                image_bytes = buf.getvalue()
+                encoded = base64.b64encode(image_bytes).decode("utf-8")
+                return f"data:image/png;base64,{encoded}"
+
+            # Case 2: HuggingFace image format: {"bytes": ..., "path": null}
+            elif isinstance(img_data, dict) and "bytes" in img_data:
+                image_bytes = img_data["bytes"]
+                if isinstance(image_bytes, (bytes, bytearray)):
+                    # Convert bytes to PIL Image, then to base64
+                    pil_image = Image.open(io.BytesIO(image_bytes))
+                    buf = io.BytesIO()
+                    pil_image.save(buf, format="PNG")
+                    encoded_bytes = buf.getvalue()
+                    encoded = base64.b64encode(encoded_bytes).decode("utf-8")
+                    return f"data:image/png;base64,{encoded}"
+
+            # Case 3: Already base64 data URL
+            elif isinstance(img_data, str) and img_data.startswith("data:image"):
+                return img_data
+
+            # Case 4: Plain base64 string
+            elif isinstance(img_data, str):
+                return f"data:image/png;base64,{img_data}"
+
+        except Exception as e:
+            logger.warning(f"Failed to convert image to base64: {e}")
+            return "[Image conversion failed]"
+
+        return str(img_data)  # Fallback
 
     def run_inference(self, adapter_path: str, base_model_id: str, prompt: str) -> str:
         """
@@ -86,7 +183,7 @@ class InferenceOrchestrator:
 
         # Determine modality and provider
         modality = infer_modality_from_messages(messages)
-        provider = self.providers[provider_key]
+        provider = self.providers.get(provider_key, "huggingface")
 
         try:
             outputs = provider.run_batch_inference(
@@ -164,6 +261,9 @@ class InferenceOrchestrator:
                 "Mismatch between number of evaluation messages and references"
             )
 
+        # Store original input messages for sample results (before batch inference)
+        input_messages_for_display = [messages.copy() for messages in eval_messages]
+
         # Generate predictions using batch inference
         try:
             predictions = self.run_batch_inference(
@@ -175,17 +275,41 @@ class InferenceOrchestrator:
 
         # Compute metrics
         evaluation_suite = EvaluationSuite()
-        evaluation_results = evaluation_suite.compute_metrics(
-            predictions, references, task_type, metrics, num_sample_results
+        metrics_results = evaluation_suite.compute_metrics(
+            predictions, references, task_type, metrics
         )
+
+        # Extract sample results for inspection
+        sample_results = []
+        if len(predictions) > 0:
+            sample_indices = np.random.choice(
+                len(predictions),
+                min(num_sample_results, len(predictions)),
+                replace=False,
+            )
+
+            for idx in sample_indices:
+                sample_result = {
+                    "prediction": predictions[idx],
+                    "reference": references[idx],
+                    "sample_index": int(idx),
+                }
+
+                # Add input messages if available
+                if idx < len(input_messages_for_display):
+                    sample_result["input"] = self._convert_messages_for_display(
+                        input_messages_for_display[idx]
+                    )
+
+                sample_results.append(sample_result)
 
         eval_time = time.time() - start_time
         logger.info(f"Evaluation completed in {eval_time:.2f} seconds")
-        logger.info(f"Computed metrics: {evaluation_results['metrics']}")
+        logger.info(f"Computed metrics: {metrics_results}")
 
         return {
-            "metrics": evaluation_results["metrics"],
-            "samples": evaluation_results["samples"],
+            "metrics": metrics_results,
+            "samples": sample_results,
             "num_samples": len(eval_dataset),
             "dataset_id": dataset_id,
             "evaluation_time": eval_time,

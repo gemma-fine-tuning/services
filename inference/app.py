@@ -95,25 +95,17 @@ async def batch_inference(request: BatchInferenceRequest):
 @app.post("/evaluation", response_model=EvaluationResponse)
 async def evaluation(request: EvaluationRequest):
     """Run evaluation of a fine-tuned model on a dataset"""
-    adapter_path = request.adapter_path
-    base_model_id = request.base_model_id
-    dataset_id = request.dataset_id
-    task_type = request.task_type
-    metrics = request.metrics
-    max_samples = request.max_samples
-    num_sample_results = request.num_sample_results or 3
-
     try:
         login_hf(request.hf_token)
         result = await run_in_threadpool(
             run_evaluation,
-            adapter_path,
-            base_model_id,
-            dataset_id,
-            task_type,
-            metrics,
-            max_samples,
-            num_sample_results,
+            request.adapter_path,
+            request.base_model_id,
+            request.dataset_id,
+            request.task_type,
+            request.metrics,
+            request.max_samples,
+            request.num_sample_results or 3,
         )
         return {
             "metrics": result["metrics"],

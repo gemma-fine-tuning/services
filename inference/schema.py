@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Any, Dict, List, Optional, Literal
+from typing import Any, Dict, List, Optional, Literal, Union
 
 
 class InferenceRequest(BaseModel):
@@ -72,11 +72,13 @@ class SampleResult(BaseModel):
     reference: str
     # Index of the sample in the evaluation dataset
     sample_index: int
+    # Input messages/question (with images converted to base64 for API compatibility)
+    input: Optional[List[Dict[str, Any]]] = None
 
 
 class EvaluationResponse(BaseModel):
-    # Computed metrics results
-    metrics: Dict[str, float]
+    # Computed metrics results (can be simple floats or nested dicts for complex metrics like bertscore)
+    metrics: Dict[str, Union[float, Dict[str, float]]]
     # Number of samples evaluated
     num_samples: int
     # Dataset ID that was evaluated

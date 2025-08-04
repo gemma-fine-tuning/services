@@ -19,7 +19,11 @@ dependencies = [
     "uvicorn[standard]==0.24.0",
     "unsloth==2025.6.12",
     "unsloth_zoo==2025.6.8",
-    "xformers==0.0.29.post3"
+    "xformers==0.0.29.post3",
+    "absl-py", 
+    "nltk",
+    "rouge_score",
+    "bert_score"
 ]
 
 [[tool.uv.index]]

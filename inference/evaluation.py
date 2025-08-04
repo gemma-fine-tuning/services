@@ -1,8 +1,8 @@
 import logging
 import numpy as np
+import evaluate
 from typing import List, Dict, Any, Tuple
 from datasets import Dataset
-import evaluate
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,20 @@ class EvaluationSuite:
 
         # stores loaded individual or grouped metrics
         self.loaded_metrics = {}
+
+    def _convert_numpy_types(self, obj):
+        """Convert numpy types to native Python types recursively."""
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, dict):
+            return {key: self._convert_numpy_types(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_numpy_types(item) for item in obj]
+        return obj
 
     def _load_metric(self, metric_name: str):
         """Load a single metric by name."""
@@ -58,7 +72,6 @@ class EvaluationSuite:
         references: List[str],
         task_type: str = None,
         metrics: List[str] = None,
-        num_samples: int = 3,
     ) -> Dict[str, Any]:
         """
         Compute metrics on predictions vs references.
@@ -68,10 +81,9 @@ class EvaluationSuite:
             references: List of reference/ground truth texts
             task_type: Task type to use predefined metric suite (mutually exclusive with metrics)
             metrics: Specific list of metrics to compute (mutually exclusive with task_type)
-            num_samples: Number of sample results to include in the response
 
         Returns:
-            Dictionary containing metric scores and sample results
+            Dictionary containing metric scores
         """
         # Determine which metrics to use
         if task_type:
@@ -105,7 +117,7 @@ class EvaluationSuite:
                         predictions=predictions, references=references, lang="en"
                     )
                     # This returns: {'precision': [0.7, 0.5], 'recall': [], 'f1': []} if there are two pred ref pairs
-                    # This takes the mean across all the sample similarities
+                    # This takes the mean across all the sample similarities and preserves nested structure
                     results["bertscore"] = {
                         "precision_mean": np.mean(result["precision"]),
                         "recall_mean": np.mean(result["recall"]),
@@ -143,23 +155,7 @@ class EvaluationSuite:
                 logger.error(f"Error computing {metric_name}: {e}")
                 results[metric_name] = 0.0
 
-        # Add sample results for inspection
-        sample_results = []
-        if len(predictions) > 0:
-            sample_indices = np.random.choice(
-                len(predictions), min(num_samples, len(predictions)), replace=False
-            )
-
-            for idx in sample_indices:
-                sample_results.append(
-                    {
-                        "prediction": predictions[idx],
-                        "reference": references[idx],
-                        "sample_index": int(idx),
-                    }
-                )
-
-        return {"metrics": results, "samples": sample_results}
+        return self._convert_numpy_types(results)
 
 
 def prepare_evaluation_data(
@@ -184,32 +180,52 @@ def prepare_evaluation_data(
     for example in dataset:
         messages = example.get("messages", [])
 
-        # Prepare input messages (user/system only)
-        user_messages = []
+        # Prepare input messages (everything except assistant messages)
+        input_messages_for_eval = []
         reference = None
 
         for message in messages:
             if message.get("role") in ["user", "system"]:
-                user_messages.append(message)
+                input_messages_for_eval.append(message)
             elif message.get("role") == "assistant":
-                # First assistant message becomes the reference
+                # First assistant message becomes the reference (extract text only)
                 if reference is None:
-                    reference = message.get("content", "")
+                    content = message.get("content", "")
+                    # Handle both new structured format and legacy format
+                    if isinstance(content, list):
+                        # New format: content is list of objects with type/text fields
+                        text_parts = []
+                        for item in content:
+                            if isinstance(item, dict) and item.get("type") == "text":
+                                text_parts.append(str(item.get("text", "")))
+                            elif isinstance(item, str):
+                                text_parts.append(item)
+                            else:
+                                # For other types (like images), convert to string
+                                text_parts.append(str(item))
+                        reference = " ".join(text_parts)
+                    else:
+                        # Legacy format: content is a simple string
+                        reference = str(content)
                 # Stop at first assistant message - we want to generate from this point
                 break
 
-        # Add to results if we have user messages
-        if user_messages:
-            eval_messages.append(user_messages)
+        # Add to results if we have input messages
+        if input_messages_for_eval:
+            eval_messages.append(input_messages_for_eval)
             # Add reference (or empty string if no assistant message found)
             if reference is not None:
-                references.append(reference.strip())
+                # Ensure reference is always a string before calling strip()
+                reference_str = (
+                    str(reference) if not isinstance(reference, str) else reference
+                )
+                references.append(reference_str.strip())
             else:
                 references.append("")
                 logger.warning(
                     "No assistant message found in example, using empty reference"
                 )
         else:
-            logger.warning("No user messages found in example, skipping")
+            logger.warning("No user/system messages found in example, skipping")
 
     return eval_messages, references
