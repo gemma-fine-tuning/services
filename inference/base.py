@@ -1,7 +1,7 @@
 import logging
 import time
 import torch
-from typing import List, Dict, any
+from typing import List, Dict, Any
 
 from storage import StorageStrategyFactory
 from utils import infer_modality_from_messages, infer_storage_type_from_path
@@ -78,15 +78,14 @@ class InferenceOrchestrator:
             if storage_type == "gcs":
                 artifact = strategy.load_model_info(adapter_path)
                 final_adapter_path = artifact.local_path
-                use_unsloth = artifact.use_unsloth
+                provider_key = artifact.provider
             else:  # hfhub
                 artifact = strategy.load_model_info(adapter_path)
                 final_adapter_path = artifact.remote_path
-                use_unsloth = artifact.use_unsloth
+                provider_key = artifact.provider
 
         # Determine modality and provider
         modality = infer_modality_from_messages(messages)
-        provider_key = "unsloth" if use_unsloth else "huggingface"
         provider = self.providers[provider_key]
 
         try:
@@ -116,7 +115,7 @@ class InferenceOrchestrator:
         metrics: List[str] = None,
         max_samples: int = None,
         num_sample_results: int = 3,
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         """
         Run evaluation of a fine-tuned model on a dataset.
 
@@ -241,7 +240,7 @@ def run_evaluation(
     metrics: List[str] = None,
     max_samples: int = None,
     num_sample_results: int = 3,
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """
     Convenience function for running evaluation with different storage backends.
 

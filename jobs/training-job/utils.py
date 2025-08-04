@@ -19,7 +19,7 @@ def run_evaluation(trainer):
 
 
 def _prepare_model_for_export(
-    model, tokenizer, export_config: ExportConfig, use_unsloth: bool, temp_dir: str
+    model, tokenizer, export_config: ExportConfig, provider: str, temp_dir: str
 ):
     """
     Prepare model for export based on the export configuration.
@@ -36,14 +36,14 @@ def _prepare_model_for_export(
         model: The trained model
         tokenizer: The tokenizer
         export_config: Export configuration
-        use_unsloth: Whether using Unsloth provider
+        provider: Training provider ("unsloth" or "huggingface")
         temp_dir: Temporary directory for saving
 
     Returns:
         Tuple of (processed_model, tokenizer, actual_temp_dir)
     """
     logging.info(
-        f"Preparing model for export with format: {export_config.format}, provider: {'unsloth' if use_unsloth else 'huggingface'}"
+        f"Preparing model for export with format: {export_config.format}, provider: {provider}"
     )
 
     # NOTE: Backward compatible with default adapter export
@@ -58,7 +58,7 @@ def _prepare_model_for_export(
         tokenizer.save_pretrained(temp_dir)
 
     # Almost all other formats require different handling between unsloth and hf
-    if use_unsloth:
+    if provider == "unsloth":
         return _prepare_unsloth_export(model, tokenizer, export_config, temp_dir)
     else:
         return _prepare_huggingface_export(model, tokenizer, export_config, temp_dir)
@@ -175,7 +175,7 @@ def save_and_track(
     tokenizer,
     job_id: str,
     base_model_id: str,
-    use_unsloth: bool,
+    provider: str,
     job_tracker: JobTracker,
     metrics: dict | None = None,
 ):
@@ -191,7 +191,7 @@ def save_and_track(
         # Prepare model for export based on configuration
         processed_model, processed_tokenizer, actual_temp_dir = (
             _prepare_model_for_export(
-                model, tokenizer, export_config, use_unsloth, temp_dir
+                model, tokenizer, export_config, provider, temp_dir
             )
         )
 
@@ -203,7 +203,7 @@ def save_and_track(
             job_id=job_id,
             base_model_id=base_model_id,
             gcs_prefix="",  # Will be set by storage service based on format
-            use_unsloth=use_unsloth,
+            provider=provider,
             local_dir=actual_temp_dir,
             hf_repo_id=export_config.hf_repo_id,
             export_format=export_config.format,

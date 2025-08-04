@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, Literal
 from dataclasses import dataclass
 from google.cloud import storage
 from datasets import Dataset
@@ -20,7 +20,7 @@ class CloudStoredModelMetadata:
     job_id: str
     base_model_id: str
     gcs_prefix: str  # GCS folder prefix for adapter artifacts
-    use_unsloth: bool = False
+    provider: Literal["huggingface", "unsloth"] = "huggingface"
     local_dir: Optional[str] = None  # Local path where artifacts are downloaded
     hf_repo_id: Optional[str] = None  # HuggingFace repo ID if applicable
 
@@ -83,7 +83,7 @@ class CloudStorageService:
             meta_dict = {
                 "job_id": metadata.job_id,
                 "base_model_id": metadata.base_model_id,
-                "use_unsloth": metadata.use_unsloth,
+                "provider": metadata.provider,
                 "export_format": metadata.export_format,
                 "quantization": metadata.quantization,
                 "hf_repo_id": metadata.hf_repo_id,
@@ -103,66 +103,70 @@ class CloudStorageService:
             raise
 
     def download_model(
-        self,
-        job_id: str,
-        export_format: str = "adapter",
-        local_dir: Optional[str] = None,
+        self, path: str, local_dir: Optional[str] = None
     ) -> CloudStoredModelMetadata:
         """
-        Download model artifacts and metadata from cloud storage into a local dir
+        Download model artifacts and metadata from cloud storage into a local dir.
 
         Args:
-            job_id (str): Unique identifier for the training job
-            export_format (str): Export format to determine correct folder structure
+            path (str): GCS path pointing to the model / adapter, with prefix merged_models or trained_adapters
             local_dir (Optional[str]): Local directory to download artifacts to.
                                        If None, uses a temporary directory.
 
         Returns:
             CloudStoredModelMetadata: Metadata object with job details and local path
         """
-        try:
-            bucket = self.storage_client.bucket(self.export_bucket)
-
-            # Determine folder prefix based on export format
-            format_prefix = self._get_format_prefix(export_format)
-            prefix = f"{format_prefix}/{job_id}"
-
-            config_blob = bucket.blob(f"{prefix}/config.json")
-            if not config_blob.exists():
-                logger.error(f"Adapter config not found in GCS for job {job_id}")
-                raise FileNotFoundError("Adapter config not found")
-            meta = json.loads(config_blob.download_as_text())
-
-            if not local_dir:
-                local_dir = f"/tmp/inference_{job_id}"
-            os.makedirs(local_dir, exist_ok=True)
-
-            # Download all files except config
-            for blob in bucket.list_blobs(prefix=prefix):
-                rel = blob.name[len(prefix) + 1 :]
-                if rel == "config.json":
-                    continue
-                dst = os.path.join(local_dir, rel)
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                blob.download_to_filename(dst)
-
-            metadata = CloudStoredModelMetadata(
-                job_id=job_id,
-                base_model_id=meta.get("base_model_id"),
-                gcs_prefix=prefix,
-                use_unsloth=meta.get("use_unsloth", False),
-                local_dir=local_dir,
-                export_format=meta.get("export_format", export_format),
-                quantization=meta.get("quantization"),
-                hf_repo_id=meta.get("hf_repo_id"),
+        bucket = self.storage_client.bucket(self.export_bucket)
+        # Extract prefix from path like "gs://bucket-name/prefix/job_id/"
+        # Remove gs:// and bucket name, then remove trailing slash
+        path_without_scheme = path.replace("gs://", "")
+        path_parts = path_without_scheme.split("/")
+        # Skip bucket name (first part) and get the rest as prefix
+        prefix = (
+            "/".join(path_parts[1:-1])
+            if path_parts[-1] == ""
+            else "/".join(path_parts[1:])
+        )
+        model_blob = bucket.blob(f"{prefix}/config.json")
+        if model_blob.exists():
+            meta = json.loads(model_blob.download_as_text())
+        else:
+            logging.error(
+                f"Model config expected at {prefix}/config.json but not found"
             )
-            return metadata
-        except Exception as e:
-            logger.error(
-                f"Error downloading model artifacts from GCS for job {job_id}: {e}",
-                exc_info=True,
+            raise FileNotFoundError(
+                f"Model config not found for job at location {path}"
             )
-            raise
+
+        # prepare local directory
+        if not local_dir:
+            local_dir = f"/tmp/inference_{meta.get('job_id', 'job_without_id')}"
+        os.makedirs(local_dir, exist_ok=True)
+
+        # download all artifacts
+        for blob in bucket.list_blobs(prefix=prefix):
+            rel = blob.name[len(prefix) + 1 :]
+            if rel == "config.json":
+                continue
+            dst = os.path.join(local_dir, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            blob.download_to_filename(dst)
+
+        # build metadata object
+        metadata = CloudStoredModelMetadata(
+            job_id=meta.get("job_id"),
+            base_model_id=meta.get("base_model_id"),
+            gcs_prefix=prefix,
+            provider=meta.get(
+                "provider", "huggingface"
+            ),  # Default to huggingface for backward compatibility
+            local_dir=local_dir,
+            hf_repo_id=meta.get("hf_repo_id"),
+            export_format=meta.get("export_format"),
+            quantization=meta.get("quantization"),
+        )
+
+        return metadata
 
     def download_processed_dataset(
         self, processed_dataset_id: str
@@ -286,7 +290,7 @@ class ModelArtifact:
     job_id: str
     local_path: str
     remote_path: str
-    use_unsloth: bool = False
+    provider: str = "huggingface"  # Training provider: "unsloth" or "huggingface"
     metadata: Optional[Dict[str, Any]] = None
 
 
@@ -360,7 +364,7 @@ class GCSStorageStrategy(ModelStorageStrategy):
 
         Args:
             local_path: Local directory containing saved model files
-            metadata: Must contain job_id, base_model_id, and optional use_unsloth flag
+            metadata: Must contain job_id, base_model_id, and optional provider field
 
         Returns:
             ModelArtifact: Reference to the uploaded model with GCS paths
@@ -373,7 +377,7 @@ class GCSStorageStrategy(ModelStorageStrategy):
             job_id=metadata.job_id,
             local_path=local_path,
             remote_path=remote_path,
-            use_unsloth=metadata.use_unsloth,
+            provider=metadata.provider,
             metadata={
                 "export_format": metadata.export_format,
                 "quantization": metadata.quantization,
@@ -381,23 +385,17 @@ class GCSStorageStrategy(ModelStorageStrategy):
             },
         )
 
-    def load_model_info(
-        self, job_id: str, export_format: str = "adapter"
-    ) -> ModelArtifact:
-        """Load model from GCS with format-specific folder structure"""
-        meta = self.storage_service.download_model(job_id, export_format)
+    def load_model_info(self, adapter_path: str) -> ModelArtifact:
+        """Load model from GCS"""
+        meta = self.storage_service.download_model(adapter_path)
 
         return ModelArtifact(
             base_model_id=meta.base_model_id,
             job_id=meta.job_id,
             local_path=meta.local_dir or "",
             remote_path=f"gs://{self.storage_service.export_bucket}/{meta.gcs_prefix}/",
-            use_unsloth=meta.use_unsloth,
-            metadata={
-                "gcs_prefix": meta.gcs_prefix,
-                "export_format": meta.export_format,
-                "quantization": meta.quantization,
-            },
+            provider=meta.provider,
+            metadata={"gcs_prefix": meta.gcs_prefix},
         )
 
     def cleanup(self, artifact: ModelArtifact) -> None:
@@ -447,7 +445,7 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
             job_id=metadata.job_id,
             local_path=local_path,
             remote_path=hf_repo_id,
-            use_unsloth=metadata.use_unsloth,
+            provider=metadata.provider,
             metadata={"hf_repo_id": hf_repo_id},
         )
 
@@ -473,18 +471,22 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
             with open(adapter_config_path, "r") as f:
                 adapter_config = json.load(f)
             base_model_id = adapter_config.get("base_model_name_or_path", repo_id)
-            use_unsloth = True if base_model_id.startswith("unsloth/") else False
+            provider = (
+                "unsloth" if base_model_id.startswith("unsloth/") else "huggingface"
+            )
         except Exception:
             logging.warning(
                 f"Failed to load adapter config for {repo_id}, falling back to repo_id as model_id"
             )
+            base_model_id = repo_id
+            provider = "huggingface"
 
         return ModelArtifact(
             base_model_id=base_model_id,
             job_id=repo_id,  # Use repo_id as job_id for HF Hub
             local_path="",  # No local path for HF Hub
             remote_path=repo_id,
-            use_unsloth=use_unsloth,
+            provider=provider,
             metadata={"hf_repo_id": repo_id},
         )
 
@@ -541,6 +543,6 @@ class StorageStrategyFactory:
 
 
 # default model storage service instance
-data_bucket = os.environ.get("GCS_DATA_BUCKET_NAME", "gemma-dataset-dev")
-export_bucket = os.environ.get("GCS_EXPORT_BUCKET_NAME", "gemma-export-dev")
+data_bucket = os.environ.get("GCS_DATA_BUCKET_NAME", "gemma-dataset-bucket")
+export_bucket = os.environ.get("GCS_EXPORT_BUCKET_NAME", "gemma-export-bucket")
 storage_service = CloudStorageService(data_bucket, export_bucket)
