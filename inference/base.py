@@ -1,7 +1,7 @@
 import logging
 import time
 import torch
-from typing import List
+from typing import List, Dict, any
 
 from storage import StorageStrategyFactory
 from utils import infer_modality_from_messages, infer_storage_type_from_path
@@ -107,6 +107,91 @@ class InferenceOrchestrator:
         )
         return outputs
 
+    def run_evaluation(
+        self,
+        adapter_path: str,
+        base_model_id: str,
+        dataset_id: str,
+        task_type: str = None,
+        metrics: List[str] = None,
+        max_samples: int = None,
+        num_sample_results: int = 3,
+    ) -> Dict[str, any]:
+        """
+        Run evaluation of a fine-tuned model on a dataset.
+
+        Args:
+            adapter_path (str): Path to adapter (local, GCS, or HF Hub repo ID)
+            base_model_id (str): Base model identifier
+            dataset_id (str): Dataset ID to evaluate on (must have eval split)
+            task_type (str, optional): Task type for predefined metric suite
+            metrics (List[str], optional): Specific list of metrics to compute
+            max_samples (int, optional): Maximum number of samples to evaluate
+            num_sample_results (int, optional): Number of sample results to include
+
+        Returns:
+            Dict containing evaluation results and metadata
+        """
+        from evaluation import (
+            EvaluationSuite,
+            prepare_evaluation_data,
+        )
+        from storage import storage_service
+
+        logger.info(
+            f"Starting evaluation for adapter: {adapter_path} on dataset: {dataset_id}"
+        )
+        start_time = time.time()
+
+        # Load evaluation dataset
+        try:
+            _, eval_dataset = storage_service.download_processed_dataset(dataset_id)
+            if eval_dataset is None:
+                raise ValueError(f"No evaluation split found for dataset {dataset_id}")
+        except Exception as e:
+            logger.error(f"Error loading dataset {dataset_id}: {e}")
+            raise
+
+        # Limit samples if specified
+        if max_samples and len(eval_dataset) > max_samples:
+            eval_dataset = eval_dataset.select(range(max_samples))
+            logger.info(f"Limited evaluation to {max_samples} samples")
+
+        # Prepare evaluation data (messages and references) in a single pass
+        eval_messages, references = prepare_evaluation_data(eval_dataset)
+
+        if len(eval_messages) != len(references):
+            raise ValueError(
+                "Mismatch between number of evaluation messages and references"
+            )
+
+        # Generate predictions using batch inference
+        try:
+            predictions = self.run_batch_inference(
+                adapter_path, base_model_id, eval_messages
+            )
+        except Exception as e:
+            logger.error(f"Error during batch inference for evaluation: {e}")
+            raise
+
+        # Compute metrics
+        evaluation_suite = EvaluationSuite()
+        evaluation_results = evaluation_suite.compute_metrics(
+            predictions, references, task_type, metrics, num_sample_results
+        )
+
+        eval_time = time.time() - start_time
+        logger.info(f"Evaluation completed in {eval_time:.2f} seconds")
+        logger.info(f"Computed metrics: {evaluation_results['metrics']}")
+
+        return {
+            "metrics": evaluation_results["metrics"],
+            "samples": evaluation_results["samples"],
+            "num_samples": len(eval_dataset),
+            "dataset_id": dataset_id,
+            "evaluation_time": eval_time,
+        }
+
 
 # Default orchestrator instance
 inference_orchestrator = InferenceOrchestrator()
@@ -145,4 +230,39 @@ def run_batch_inference(
     """
     return inference_orchestrator.run_batch_inference(
         adapter_path, base_model_id, messages
+    )
+
+
+def run_evaluation(
+    adapter_path: str,
+    base_model_id: str,
+    dataset_id: str,
+    task_type: str = None,
+    metrics: List[str] = None,
+    max_samples: int = None,
+    num_sample_results: int = 3,
+) -> Dict[str, any]:
+    """
+    Convenience function for running evaluation with different storage backends.
+
+    Args:
+        adapter_path (str): Path to adapter (local, GCS, or HF Hub repo ID)
+        base_model_id (str): Base model identifier
+        dataset_id (str): Dataset ID to evaluate on (must have eval split)
+        task_type (str, optional): Task type for predefined metric suite
+        metrics (List[str], optional): Specific list of metrics to compute
+        max_samples (int, optional): Maximum number of samples to evaluate
+        num_sample_results (int, optional): Number of sample results to include
+
+    Returns:
+        Dict containing evaluation results and metadata
+    """
+    return inference_orchestrator.run_evaluation(
+        adapter_path,
+        base_model_id,
+        dataset_id,
+        task_type,
+        metrics,
+        max_samples,
+        num_sample_results,
     )

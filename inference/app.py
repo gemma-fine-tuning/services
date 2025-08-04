@@ -9,8 +9,10 @@ from schema import (
     InferenceResponse,
     BatchInferenceRequest,
     BatchInferenceResponse,
+    EvaluationRequest,
+    EvaluationResponse,
 )
-from base import run_inference, run_batch_inference
+from base import run_inference, run_batch_inference, run_evaluation
 from typing import Optional
 
 app = FastAPI(
@@ -87,6 +89,46 @@ async def batch_inference(request: BatchInferenceRequest):
         raise HTTPException(status_code=404, detail="Adapter not found")
     except Exception as e:
         logging.error(f"Batch inference failed with error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/evaluation", response_model=EvaluationResponse)
+async def evaluation(request: EvaluationRequest):
+    """Run evaluation of a fine-tuned model on a dataset"""
+    adapter_path = request.adapter_path
+    base_model_id = request.base_model_id
+    dataset_id = request.dataset_id
+    task_type = request.task_type
+    metrics = request.metrics
+    max_samples = request.max_samples
+    num_sample_results = request.num_sample_results or 3
+
+    try:
+        login_hf(request.hf_token)
+        result = await run_in_threadpool(
+            run_evaluation,
+            adapter_path,
+            base_model_id,
+            dataset_id,
+            task_type,
+            metrics,
+            max_samples,
+            num_sample_results,
+        )
+        return {
+            "metrics": result["metrics"],
+            "samples": result["samples"],
+            "num_samples": result["num_samples"],
+            "dataset_id": result["dataset_id"],
+        }
+    except FileNotFoundError as e:
+        logging.error(f"Resource not found: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        logging.error(f"Invalid request: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Evaluation failed with error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

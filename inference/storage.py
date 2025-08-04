@@ -92,12 +92,23 @@ class CloudStorageService:
             CloudStoredModelMetadata: Metadata object with job details and local path
         """
         bucket = self.storage_client.bucket(self.export_bucket)
-        # Path is "gs://{self.export_bucket}/{prefix}/", this split gives prefix
-        prefix = path.split("/")[-2]
+        # Extract prefix from path like "gs://bucket-name/prefix/job_id/"
+        # Remove gs:// and bucket name, then remove trailing slash
+        path_without_scheme = path.replace("gs://", "")
+        path_parts = path_without_scheme.split("/")
+        # Skip bucket name (first part) and get the rest as prefix
+        prefix = (
+            "/".join(path_parts[1:-1])
+            if path_parts[-1] == ""
+            else "/".join(path_parts[1:])
+        )
         model_blob = bucket.blob(f"{prefix}/config.json")
         if model_blob.exists():
             meta = json.loads(model_blob.download_as_text())
         else:
+            logging.error(
+                f"Model config expected at {prefix}/config.json but not found"
+            )
             raise FileNotFoundError(
                 f"Model config not found for job at location {path}"
             )
