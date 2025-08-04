@@ -9,6 +9,7 @@ FastAPI service for running inference on fine-tuned Gemma models.
 - **`providers.py`** - Inference provider implementations (HuggingFace, Unsloth)
 - **`storage.py`** - Model loading from GCS/HuggingFace Hub
 - **`schema.py`** - Request/response models
+- **`evaluation.py`** - Evaluation logic for fine-tuned models using `evaluate`
 - **`utils.py`** - Utility functions for modality detection and storage type inference
 
 ## Deployment
@@ -24,7 +25,9 @@ gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
 
 ### POST `/inference`
 
-Single inference request. The service automatically detects storage type from the adapter path.
+Single inference request. The service automatically detects storage type from the adapter path. Both `adapter_path` and `base_model_id` are accessible on the job object in the frontend because the training service returns these fields.
+
+> This is for text only!!! You should use `/batch_inference` for more complex structure or vision fields, the messages can be obtained from the preprocessing service.
 
 **Request:**
 
@@ -76,6 +79,114 @@ Batch inference for multiple conversations.
 }
 ```
 
+#### Vision Batch Inference
+
+Image field value should be a base64-encoded string, which can be obtained from the `get_dataset_preview` endpoint from preprocessing service (it returns the entire `messages` structure but contains assistant field).
+
+```json
+{
+  "hf_token": "hf_your_token_here",
+  "adapter_path": "username/model-name",
+  "base_model_id": "google/gemma-3-2b-pt",
+  "messages": [
+    [
+      {
+        "content": [{ "type": "text", "text": "..." }],
+        "role": "system"
+      },
+      {
+        "content": [
+          { "type": "text", "text": "..." },
+          {
+            "type": "image",
+            "image": "data:image/png;base64,<base64_encoded_image>"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  ]
+}
+```
+
+### POST `/evaluation`
+
+Evaluate a fine-tuned model on a dataset. You can use either **task types** (recommended) or specific metrics.
+
+#### Using Task Types (Recommended)
+
+```json
+{
+  "hf_token": "hf_your_token_here",
+  "adapter_path": "username/model-name",
+  "base_model_id": "google/gemma-3-2b-pt",
+  "dataset_id": "processed_dataset_123",
+  "task_type": "conversation",
+  "num_sample_results": 3
+}
+```
+
+**Available Task Types:**
+
+- `"conversation"` → bertscore, rouge
+- `"qa"` → exact_match, bertscore
+- `"summarization"` → rouge, bertscore
+- `"translation"` → bleu, meteor
+- `"classification"` → accuracy, recall, precision, f1, exact_match
+- `"general"` → bertscore, rouge
+
+#### Using Specific Metrics
+
+```json
+{
+  "hf_token": "hf_your_token_here",
+  "adapter_path": "username/model-name",
+  "base_model_id": "google/gemma-3-2b-pt",
+  "dataset_id": "processed_dataset_123",
+  "metrics": ["bertscore", "rouge"],
+  "num_sample_results": 3
+}
+```
+
+**Available Metrics:**
+
+- `bertscore`: Semantic similarity (⭐ **Recommended for LLMs**)
+- `rouge`: Text overlap and summarization quality (⭐ **Recommended for LLMs**)
+- `exact_match`: Exact string matching (good for QA)
+- `accuracy`: Classification accuracy
+- `recall`, `precision`, `f1`: Classification metrics
+- `bleu`, `meteor`: Translation metrics
+
+> More metrics will be added soon
+
+**Response:**
+
+```json
+{
+  "metrics": {
+    "bertscore_f1": 0.85,
+    "rouge_l": 0.82,
+    "rouge_1": 0.85,
+    "rouge_2": 0.78
+  },
+  "samples": [
+    {
+      "prediction": "Model's generated text",
+      "reference": "Ground truth text",
+      "sample_index": 42
+    },
+    {
+      "prediction": "Another prediction",
+      "reference": "Another reference",
+      "sample_index": 156
+    }
+  ],
+  "num_samples": 1000,
+  "dataset_id": "processed_dataset_123",
+  "task_type": "conversation"
+}
+```
+
 ### GET `/health`
 
 Health check endpoint.
@@ -88,14 +199,6 @@ Health check endpoint.
   "service": "inference"
 }
 ```
-
-## Key Features
-
-1. **Automatic Storage Type Detection**: The service automatically detects whether the adapter path is local, GCS, or HuggingFace Hub
-2. **Adapter and Merged Model Support**: Works with both LoRA adapters and fully merged models
-3. **Framework Support**: Supports both HuggingFace Transformers and Unsloth inference
-4. **Vision and Text Models**: Handles both text-only and vision models based on message content
-5. **HF Token**: Required for Gemma models (gated access)
 
 ## Environment
 

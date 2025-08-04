@@ -27,8 +27,9 @@ gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
 2. **Config**: Load training config from GCS bucket
 3. **Login**: Authenticate with HuggingFace using token
 4. **Train**: Execute fine-tuning with selected provider
-5. **Track**: Update job status in Firestore
-6. **Export**: Save model to GCS or push to HF Hub
+5. **Evaluate**: Run evaluation if configured
+6. **Track**: Update job status in Firestore
+7. **Export**: Save model to GCS or push to HF Hub
 
 ## Training Methods
 
@@ -79,6 +80,56 @@ gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
 - **Firestore**: Job status tracking
 - **Cloud Logging**: Execution logs
 
-## Export and Evaluation
+## Export Formats
 
-Refer to the README.md in `training/`
+### Adapter Export
+
+- **Format**: `adapter`
+- **Quantization**: Not applicable
+- **Use case**: Lightweight LoRA/QLoRA adapter weights only
+- **Storage**: ~MB in size, fast upload/download
+
+### Merged Export
+
+- **Format**: `merged`
+- **Quantization**: `none`, `fp16`, `q4` (4-bit)
+- **Use case**: Full standalone model for deployment
+- **Providers**:
+  - Unsloth: `merged_16bit` (vLLM compatible), `merged_4bit`
+  - HuggingFace: Standard merge with PEFT, supports FP16 quantization
+
+### GGUF Export
+
+- **Format**: `gguf`
+- **Quantization**: `f16`, `q8_0`, `q4_k_m`, `q5_k_m`, `q2_k`
+- **Use case**: CPU-optimized inference (llama.cpp, Ollama)
+- **Providers**:
+  - Unsloth: Native GGUF export with quantization
+  - HuggingFace: Not implemented (requires llama.cpp conversion)
+
+## Evaluation
+
+Configure evaluation during training:
+
+- **eval_strategy**: When to run evaluation (`no`, `steps`, `epoch`)
+- **eval_steps**: Evaluation frequency when using `steps` strategy
+- **evaluation_metrics**: Metrics to compute (`accuracy`, `perplexity`)
+- **batch_eval_metrics**: Enable batch evaluation mode for better performance
+
+Supported metrics:
+
+- **Accuracy**: Token-level classification accuracy
+- **Perplexity**: Model confidence metric (2^loss)
+- **Loss**: Training/validation loss
+
+> If you want more complicated metrics, currently they are only supported in the inference service, you can use the `/evaluate` endpoint there.
+
+## Known Issues
+
+- GGUF export is currently not supported by HuggingFace but you can do it manually using `llama.cpp` or `ollama` tools.
+
+- GGUF export for Unsloth is being fixed by the unsloth team...
+
+- Evaluation during training is not supported for Unsloth, this might be worked on by unsloth team (use eval in inference service instead)
+
+- Evaluation metrics might not work on hugging face due to OOM depending on your config...
