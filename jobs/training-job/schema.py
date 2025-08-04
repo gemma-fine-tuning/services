@@ -11,7 +11,6 @@ class TrainingConfig(BaseModel):
 
     learning_rate: float = 2e-4
     # Seems like batch size = 8 will cause OOM on the L4 on Cloud Run
-    # I haven't enforced a check yet but for prod we should probably limit this
     batch_size: int = 4
     gradient_accumulation_steps: int = 4
     epochs: int = 3
@@ -56,24 +55,17 @@ class ExportConfig(BaseModel):
     format: Literal["adapter", "merged", "gguf"] = "adapter"
     quantization: Optional[
         Literal[
-            # For merged models
-            "none",
-            "fp16",
-            # q4 and q8 referes to fp4 and int8, this makes it consistent with GGUF
-            # "q8",  # NOTE: not yet explicitly supported
-            "q4",
-            # TODO: For now we don't check this we assume the frontend is aware of valid config
-            # for GGUF format (Unsloth)
-            "f16",
+            "fp32",  # refers to "f32" in GGUF, i.e. no quantization
+            "fp16",  # refers to "f16" in GGUF, half precision in HF / Unsloth
+            "q8",  # refers to "q8_0" in GGUF and int8 in HF / Unsloth
+            "q4",  # refers to "q4_k_m" in GGUF and fp4 in HF / Unsloth
+            "q5",  # refers to "q5_k_m" in GGUF, only supported in GGUF
+            # below are GGUF quants only work on Unsloth GGUF
             "not_quantized",
             "fast_quantized",
             "quantized",
-            "q8_0",
-            "q4_k_m",  # recommended for Unsloth
-            "q5_k_m",  # recommended for Unsloth
-            "q2_k",
         ]
-    ] = "none"
+    ] = "q4"
     destination: Literal["gcs", "hfhub"] = "gcs"
     hf_repo_id: Optional[str] = None
 

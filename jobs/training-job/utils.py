@@ -1,12 +1,23 @@
 import logging
 import torch
 from transformers import EvalPrediction
-from typing import Callable
+from typing import Callable, Tuple, Any
 from storage import StorageStrategyFactory, CloudStoredModelMetadata
 from job_manager import JobTracker
 from schema import ExportConfig
 import os
 import shutil
+
+GGUF_QUANTS = {
+    "none": "f32",
+    "fp16": "f16",
+    "q8": "q8_0",
+    "q4": "q4_k_m",
+    "q5": "q5_k_m",
+    "not_quantized": "not_quantized",
+    "fast_quantized": "fast_quantized",
+    "quantized": "quantized",
+}
 
 
 def run_evaluation(trainer):
@@ -20,7 +31,7 @@ def run_evaluation(trainer):
 
 def _prepare_model_for_export(
     model, tokenizer, export_config: ExportConfig, provider: str, temp_dir: str
-):
+) -> Tuple[Any, Any, str]:
     """
     Prepare model for export based on the export configuration.
     Uses provider-specific saving methods (Unsloth vs HuggingFace).
@@ -49,13 +60,12 @@ def _prepare_model_for_export(
     # NOTE: Backward compatible with default adapter export
     # For unsloth this also works: model.save_pretrained_merged("model", tokenizer, save_method = "lora",)
     if export_config.format == "adapter":
-        # Save model locally first
         if hasattr(model, "save_pretrained"):
             model.save_pretrained(temp_dir)
         else:
-            # For trainers
-            model.save_model(temp_dir)
+            model.save_model(temp_dir)  # For trainers
         tokenizer.save_pretrained(temp_dir)
+        return model, tokenizer, temp_dir
 
     # Almost all other formats require different handling between unsloth and hf
     if provider == "unsloth":
@@ -75,6 +85,7 @@ def _prepare_unsloth_export(
             f"Saving Unsloth merged model with quantization: {export_config.quantization}"
         )
 
+        # NOTE: Unsloth's save_pretrained methods save BOTH the model (formatted) AND tokenizer
         if export_config.quantization == "fp16":
             # This format (merged 16bit) works for vLLM
             model.save_pretrained_merged(
@@ -82,7 +93,9 @@ def _prepare_unsloth_export(
             )
         elif export_config.quantization == "q4":
             # fp4 can be easily loaded with HF transformers libraries
-            model.save_pretrained_merged(temp_dir, tokenizer, save_method="merged_4bit")
+            model.save_pretrained_merged(
+                temp_dir, tokenizer, save_method="merged_4bit_forced"
+            )
         else:
             logging.error(
                 f"Unsupported quantization for Unsloth merged export: {export_config.quantization}"
@@ -100,7 +113,11 @@ def _prepare_unsloth_export(
 
         try:
             model.save_pretrained_gguf(
-                temp_dir, tokenizer, quantization_method=export_config.quantization
+                temp_dir,
+                tokenizer,
+                quantization_method=GGUF_QUANTS.get(
+                    export_config.quantization, "q4_k_m"
+                ),
             )
             return model, tokenizer, temp_dir
         except Exception as e:
@@ -126,18 +143,25 @@ def _prepare_huggingface_export(
         )
 
         try:
-            if hasattr(model, "merge_and_unload"):
-                # only for PEFT models
+            if (
+                hasattr(model, "merge_and_unload")
+                and export_config.quantization == "q4"
+            ):
+                # only for PEFT models generated using get_peft_model()
+                # NOTE: This casts to 4bit by default, and you cannot switch the quantisation later
+                # This seems to be the only method that works, model.merge_adapter() doesn't seem to work
                 merged_model = model.merge_and_unload()
             else:
                 # Already a merged model or full fine-tuning
                 merged_model = model
 
-            # Apply quantization if specified
             if export_config.quantization == "fp16":
                 # This is equivalent as: model.to(dtype=torch.float16)
                 # NOTE: This will not work for 4bit or 8bit because pytorch only works with floats
-                merged_model = merged_model.half()
+                logging.warning(
+                    "FP16 quantization is not supported for HuggingFace merged export. Only 4bit works."
+                )
+                # model = model.half()
 
             # save_pretrained automatically handles 8bit and 4bit using bitsandbytes
             # it also uploads the quantisation configuration so it is loaded properly
@@ -154,10 +178,12 @@ def _prepare_huggingface_export(
         logging.error(
             "HuggingFace GGUF export not implemented - requires llama.cpp conversion"
         )
+
         # TODO: This would require:
         # 1. First merge the model and save as HF format
         # 2. Use llama.cpp convert-hf-to-gguf.py script
-        # 3. This is complex and might be better as a separate service
+        # SUPPORTS: f32, f16, q8_0
+
         raise NotImplementedError(
             "HuggingFace GGUF export requires llama.cpp conversion tools"
         )
@@ -168,7 +194,6 @@ def _prepare_huggingface_export(
         )
 
 
-# TODO: Update the actual merging and etc method here since you have the model AND tokenizer and config
 def save_and_track(
     export_config: ExportConfig,
     model,

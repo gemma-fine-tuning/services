@@ -114,7 +114,7 @@ class BaseTrainingService(ABC):
             tokenizer,
             tracker.job_id,
             req.training_config.base_model_id,
-            req.training_config.provider == "unsloth",
+            req.training_config.provider,
             tracker,
             metrics,
         )

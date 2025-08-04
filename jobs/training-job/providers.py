@@ -305,8 +305,10 @@ class HuggingFaceTrainingService(BaseTrainingService):
 
 class UnslothTrainingService(BaseTrainingService):
     def __init__(self) -> None:
-        from unsloth.trainer import UnslothVisionDataCollator
+        # importing unsloth is unused but necessary for optimization
+        import unsloth  # noqa: F401
         from unsloth import FastModel, FastVisionModel, is_bfloat16_supported
+        from unsloth.trainer import UnslothVisionDataCollator
         from unsloth.chat_templates import (
             get_chat_template,
             standardize_data_formats,

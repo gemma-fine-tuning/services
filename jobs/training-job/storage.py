@@ -88,7 +88,8 @@ class CloudStorageService:
                 "quantization": metadata.quantization,
                 "hf_repo_id": metadata.hf_repo_id,
             }
-            blob = bucket.blob(f"{prefix}/config.json")
+            # NOTE: Avoid using config.json because it conflicts with the model config file!
+            blob = bucket.blob(f"{prefix}/custom_config.json")
             blob.upload_from_string(
                 json.dumps(meta_dict), content_type="application/json"
             )
@@ -127,12 +128,12 @@ class CloudStorageService:
             if path_parts[-1] == ""
             else "/".join(path_parts[1:])
         )
-        model_blob = bucket.blob(f"{prefix}/config.json")
+        model_blob = bucket.blob(f"{prefix}/custom_config.json")
         if model_blob.exists():
             meta = json.loads(model_blob.download_as_text())
         else:
             logging.error(
-                f"Model config expected at {prefix}/config.json but not found"
+                f"Model config expected at {prefix}/custom_config.json but not found"
             )
             raise FileNotFoundError(
                 f"Model config not found for job at location {path}"
@@ -146,7 +147,7 @@ class CloudStorageService:
         # download all artifacts
         for blob in bucket.list_blobs(prefix=prefix):
             rel = blob.name[len(prefix) + 1 :]
-            if rel == "config.json":
+            if rel == "custom_config.json":
                 continue
             dst = os.path.join(local_dir, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -430,11 +431,17 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
 
         try:
             api = HfApi()
+            # Need to create the repo first then upload folder
+            api.create_repo(
+                repo_id=hf_repo_id,
+                repo_type="model",
+                private=True,  # Set to True for private repos, False for public
+                exist_ok=True,  # Create if not exists
+            )
             api.upload_folder(
                 folder_path=local_path,
                 repo_id=hf_repo_id,
                 repo_type="model",
-                private=True,
             )
         except Exception as e:
             logging.error(f"Failed to upload folder to HuggingFace Hub: {e}")
