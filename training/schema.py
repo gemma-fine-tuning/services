@@ -118,6 +118,7 @@ class JobStatusResponse(BaseModel):
 class JobListEntry(BaseModel):
     job_id: str
     job_name: str = "unnamed job"
+    base_model_id: Optional[str] = None
     modality: Optional[Literal["text", "vision"]] = "text"
     # "unknown" is a fallback for jobs that don't have a status but are listed
     status: Literal[
