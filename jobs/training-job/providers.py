@@ -5,7 +5,9 @@ from typing import Any, Tuple
 
 from storage import storage_service
 from base import BaseTrainingService
-from utils import create_compute_metrics, preprocess_logits_for_metrics
+
+# from utils import create_compute_metrics, preprocess_logits_for_metrics
+from utils import create_compute_metrics
 from schema import TrainingConfig
 
 
@@ -156,6 +158,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
             per_device_train_batch_size=cfg.batch_size,
             per_device_eval_batch_size=cfg.batch_size,
             gradient_accumulation_steps=cfg.gradient_accumulation_steps,
+            eval_accumulation_steps=cfg.gradient_accumulation_steps,
             warmup_steps=5,
             num_train_epochs=cfg.epochs,
             max_steps=cfg.max_steps or -1,
@@ -163,6 +166,8 @@ class HuggingFaceTrainingService(BaseTrainingService):
             packing=cfg.packing,
             fp16=fp16,
             bf16=bf16,
+            fp16_full_eval=fp16,
+            bf16_full_eval=bf16,
             optim="adamw_torch_fused",
             lr_scheduler_type=cfg.lr_scheduler_type or "linear",
             weight_decay=0.01,
@@ -209,9 +214,9 @@ class HuggingFaceTrainingService(BaseTrainingService):
             compute_metrics=create_compute_metrics(
                 cfg.compute_eval_metrics, cfg.batch_eval_metrics
             ),
-            preprocess_logits_for_metrics=preprocess_logits_for_metrics
-            if cfg.compute_eval_metrics
-            else None,
+            # preprocess_logits_for_metrics=preprocess_logits_for_metrics
+            # if cfg.compute_eval_metrics
+            # else None,
         )
 
     def _create_vision_collate_fn(self, processor):
@@ -455,6 +460,7 @@ class UnslothTrainingService(BaseTrainingService):
             per_device_train_batch_size=cfg.batch_size,
             per_device_eval_batch_size=cfg.batch_size,
             gradient_accumulation_steps=cfg.gradient_accumulation_steps,
+            eval_accumulation_steps=cfg.gradient_accumulation_steps,
             warmup_steps=5,
             num_train_epochs=cfg.epochs,
             max_steps=cfg.max_steps or -1,
@@ -462,6 +468,8 @@ class UnslothTrainingService(BaseTrainingService):
             packing=cfg.packing,
             fp16=not self.is_bfloat16_supported(),
             bf16=self.is_bfloat16_supported(),
+            fp16_full_eval=not self.is_bfloat16_supported(),
+            bf16_full_eval=self.is_bfloat16_supported(),
             optim="adamw_8bit",  # Unsloth default
             lr_scheduler_type=cfg.lr_scheduler_type or "linear",
             weight_decay=0.01,
@@ -511,9 +519,9 @@ class UnslothTrainingService(BaseTrainingService):
             compute_metrics=create_compute_metrics(
                 cfg.compute_eval_metrics, cfg.batch_eval_metrics
             ),
-            preprocess_logits_for_metrics=preprocess_logits_for_metrics
-            if cfg.compute_eval_metrics
-            else None,
+            # preprocess_logits_for_metrics=preprocess_logits_for_metrics
+            # if cfg.compute_eval_metrics
+            # else None,
         )
 
         # Apply response-only for text
