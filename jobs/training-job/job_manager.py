@@ -58,6 +58,7 @@ class JobStateManager:
         adapter_path: str,
         base_model_id: str,
         metrics: Optional[Dict[str, Any]] = None,
+        gguf_path: Optional[str] = None,
     ) -> None:
         """
         Mark job as completed and optionally store evaluation metrics.
@@ -70,6 +71,8 @@ class JobStateManager:
         }
         if metrics is not None:
             update_data["metrics"] = metrics
+        if gguf_path is not None:
+            update_data["gguf_path"] = gguf_path
         self.collection.document(job_id).update(update_data)
         self.logger.info(f"Marked job {job_id} as completed")
 
@@ -129,10 +132,11 @@ class JobTracker:
         adapter_path: str,
         base_model_id: str,
         metrics: Optional[Dict[str, Any]] = None,
+        gguf_path: Optional[str] = None,
     ):
         """Mark job as completed and record evaluation metrics"""
         self.job_manager.mark_completed(
-            self.job_id, adapter_path, base_model_id, metrics
+            self.job_id, adapter_path, base_model_id, metrics, gguf_path
         )
 
     def failed(self, error: str):

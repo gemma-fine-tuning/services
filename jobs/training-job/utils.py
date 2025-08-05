@@ -7,17 +7,7 @@ from job_manager import JobTracker
 from schema import ExportConfig
 import os
 import shutil
-
-GGUF_QUANTS = {
-    "none": "f32",
-    "fp16": "f16",
-    "q8": "q8_0",
-    "q4": "q4_k_m",
-    "q5": "q5_k_m",
-    "not_quantized": "not_quantized",
-    "fast_quantized": "fast_quantized",
-    "quantized": "quantized",
-}
+import numpy as np
 
 
 def run_evaluation(trainer):
@@ -57,7 +47,6 @@ def _prepare_model_for_export(
         f"Preparing model for export with format: {export_config.format}, provider: {provider}"
     )
 
-    # NOTE: Backward compatible with default adapter export
     # For unsloth this also works: model.save_pretrained_merged("model", tokenizer, save_method = "lora",)
     if export_config.format == "adapter":
         if hasattr(model, "save_pretrained"):
@@ -67,131 +56,97 @@ def _prepare_model_for_export(
         tokenizer.save_pretrained(temp_dir)
         return model, tokenizer, temp_dir
 
-    # Almost all other formats require different handling between unsloth and hf
-    if provider == "unsloth":
-        return _prepare_unsloth_export(model, tokenizer, export_config, temp_dir)
+    # Handle merged format for both unsloth and hf
+    elif export_config.format == "merged":
+        if provider == "unsloth":
+            try:
+                # Unsloth's save_pretrained methods save BOTH the model (formatted) AND tokenizer
+                # This format (merged 16bit) works for vLLM: https://docs.unsloth.ai/basics/running-and-saving-models/saving-to-vllm
+                model.save_pretrained_merged(
+                    temp_dir, tokenizer, save_method="merged_16bit"
+                )
+                # TODO: alternatively we can use "merged_4bit" which is helpful for HF inference engine, but it sometimes breaks
+                return model, tokenizer, temp_dir
+            except Exception as e:
+                logging.error(f"Error during Unsloth model merging: {e}")
+                raise
+        else:
+            try:
+                if hasattr(model, "merge_and_unload"):
+                    # only for PEFT models generated using get_peft_model()
+                    # NOTE: This casts to 4bit by default, and you cannot switch the quantisation later
+                    # This seems to be the only method that works, model.merge_adapter() doesn't seem to work
+                    merged_model = model.merge_and_unload()
+                else:
+                    # Already a merged model or full fine-tuning
+                    merged_model = model
+
+                # save_pretrained automatically handles 8bit and 4bit using bitsandbytes
+                merged_model.save_pretrained(temp_dir, safe_serialization=True)
+                tokenizer.save_pretrained(temp_dir)
+                return merged_model, tokenizer, temp_dir
+            except Exception as e:
+                logging.error(f"Error during HuggingFace model merging: {e}")
+                raise
     else:
-        return _prepare_huggingface_export(model, tokenizer, export_config, temp_dir)
+        raise ValueError(f"Unsupported export format: {export_config.format}")
 
 
-def _prepare_unsloth_export(
-    model, tokenizer, export_config: ExportConfig, temp_dir: str
-):
-    """Handle Unsloth-specific export methods"""
-    if export_config.format == "merged":
-        # Use Unsloth's merged saving methods
-        # https://docs.unsloth.ai/basics/running-and-saving-models/saving-to-vllm
-        logging.info(
-            f"Saving Unsloth merged model with quantization: {export_config.quantization}"
+def _prepare_gguf_export(
+    model, tokenizer, export_config: ExportConfig, provider: str, temp_dir: str
+) -> str:
+    """
+    Prepare GGUF export separately. This function handles GGUF export for both providers.
+
+    Args:
+        model: The trained model
+        tokenizer: The tokenizer
+        export_config: Export configuration
+        provider: Training provider ("unsloth" or "huggingface")
+        temp_dir: Temporary directory for saving
+
+    Returns:
+        Path to the generated GGUF file
+    """
+    if provider == "unsloth":
+        return _prepare_unsloth_gguf_export(model, tokenizer, export_config, temp_dir)
+    else:
+        raise NotImplementedError(
+            "HuggingFace GGUF export requires llama.cpp conversion tools, do it manually for now!"
         )
 
-        # NOTE: Unsloth's save_pretrained methods save BOTH the model (formatted) AND tokenizer
-        if export_config.quantization == "fp16":
-            # This format (merged 16bit) works for vLLM
-            model.save_pretrained_merged(
-                temp_dir, tokenizer, save_method="merged_16bit"
-            )
-        elif export_config.quantization == "q4":
-            # fp4 can be easily loaded with HF transformers libraries
-            model.save_pretrained_merged(
-                temp_dir, tokenizer, save_method="merged_4bit_forced"
+
+def _prepare_unsloth_gguf_export(
+    model, tokenizer, export_config: ExportConfig, temp_dir: str
+) -> str:
+    """Handle Unsloth-specific GGUF export methods"""
+    logging.info(
+        f"Saving Unsloth GGUF with quantization: {export_config.gguf_quantization}"
+    )
+
+    try:
+        # First check if temp_dir exists and contain config.json i.e. already merged
+        if os.path.exists(temp_dir) and os.path.isfile(
+            os.path.join(temp_dir, "config.json")
+        ):
+            gguf_file_path = model.save_pretrained_gguf(
+                temp_dir, quantization_method=export_config.gguf_quantization
             )
         else:
-            logging.error(
-                f"Unsupported quantization for Unsloth merged export: {export_config.quantization}"
+            # We first need to save a merged model then convert to GGUF with quant
+            gguf_temp_dir = f"{temp_dir}_gguf_intermediate"
+            model.save_pretrained_merged(
+                gguf_temp_dir, tokenizer, save_method="merged_16bit"
             )
-
-        return model, tokenizer, temp_dir
-
-    elif export_config.format == "gguf":
-        # Use Unsloth's native GGUF export
-        # https://docs.unsloth.ai/basics/running-and-saving-models/saving-to-gguf
-        # NOTE: This does not yet work will be fixed sooon by unsloth team
-        logging.info(
-            f"Saving Unsloth GGUF with quantization: {export_config.quantization}"
-        )
-
-        try:
-            model.save_pretrained_gguf(
-                temp_dir,
-                tokenizer,
-                quantization_method=GGUF_QUANTS.get(
-                    export_config.quantization, "q4_k_m"
-                ),
+            # This takes model saved in gguf_temp_dir to create a .gguf file separately
+            gguf_file_path = model.save_pretrained_gguf(
+                gguf_temp_dir, quantization_method=export_config.gguf_quantization
             )
-            return model, tokenizer, temp_dir
-        except Exception as e:
-            logging.error(f"Error during Unsloth GGUF export: {e}")
-            raise
-
-    else:
-        raise ValueError(
-            f"Unsupported export format for Unsloth: {export_config.format}"
-        )
-
-
-def _prepare_huggingface_export(
-    model, tokenizer, export_config: ExportConfig, temp_dir: str
-):
-    """
-    Handle HuggingFace-specific export methods
-    """
-    if export_config.format == "merged":
-        # Merge adapter weights into base model using HuggingFace/PEFT methods
-        logging.info(
-            f"Merging HuggingFace adapter with quantization: {export_config.quantization}"
-        )
-
-        try:
-            if (
-                hasattr(model, "merge_and_unload")
-                and export_config.quantization == "q4"
-            ):
-                # only for PEFT models generated using get_peft_model()
-                # NOTE: This casts to 4bit by default, and you cannot switch the quantisation later
-                # This seems to be the only method that works, model.merge_adapter() doesn't seem to work
-                merged_model = model.merge_and_unload()
-            else:
-                # Already a merged model or full fine-tuning
-                merged_model = model
-
-            if export_config.quantization == "fp16":
-                # This is equivalent as: model.to(dtype=torch.float16)
-                # NOTE: This will not work for 4bit or 8bit because pytorch only works with floats
-                logging.warning(
-                    "FP16 quantization is not supported for HuggingFace merged export. Only 4bit works."
-                )
-                # model = model.half()
-
-            # save_pretrained automatically handles 8bit and 4bit using bitsandbytes
-            # it also uploads the quantisation configuration so it is loaded properly
-            merged_model.save_pretrained(temp_dir, safe_serialization=True)
-            tokenizer.save_pretrained(temp_dir)
-            return merged_model, tokenizer, temp_dir
-
-        except Exception as e:
-            logging.error(f"Error during HuggingFace model merging: {e}")
-            raise
-
-    elif export_config.format == "gguf":
-        # HuggingFace GGUF export requires external tools
-        logging.error(
-            "HuggingFace GGUF export not implemented - requires llama.cpp conversion"
-        )
-
-        # TODO: This would require:
-        # 1. First merge the model and save as HF format
-        # 2. Use llama.cpp convert-hf-to-gguf.py script
-        # SUPPORTS: f32, f16, q8_0
-
-        raise NotImplementedError(
-            "HuggingFace GGUF export requires llama.cpp conversion tools"
-        )
-
-    else:
-        raise ValueError(
-            f"Unsupported export format for HuggingFace: {export_config.format}"
-        )
+            logging.info(f"GGUF file converted and saved to {gguf_file_path[0]}")
+        return gguf_file_path[0]  # gguf_file_path is List[str]
+    except Exception as e:
+        logging.error(f"Error during Unsloth GGUF export: {e}")
+        raise
 
 
 def save_and_track(
@@ -206,24 +161,34 @@ def save_and_track(
 ):
     """
     Save the model using storage strategy, cleanup, and mark job as completed.
-    Saves the model in the format specified by export_config (adapter, merged, or gguf).
+    Saves the model in the format specified by export_config (adapter or merged).
+    Optionally also exports GGUF if requested.
     The inference service will handle both adapter and merged models automatically.
     """
     # Determine temp directory based on export format
     temp_dir = f"/tmp/{job_id}_{export_config.format}"
+    gguf_file_path = None
 
     try:
-        # Prepare model for export based on configuration
+        # Prepare primary model for export based on configuration
         processed_model, processed_tokenizer, actual_temp_dir = (
             _prepare_model_for_export(
                 model, tokenizer, export_config, provider, temp_dir
             )
         )
 
+        # Prepare GGUF export if requested
+        if export_config.include_gguf:
+            gguf_file_path = _prepare_gguf_export(
+                model, tokenizer, export_config, provider, temp_dir
+            )
+
         # Use export_config.destination to determine storage strategy
         storage_strategy = StorageStrategyFactory.create_strategy(
             export_config.destination
         )
+
+        # Save primary model
         metadata = CloudStoredModelMetadata(
             job_id=job_id,
             base_model_id=base_model_id,
@@ -232,17 +197,48 @@ def save_and_track(
             local_dir=actual_temp_dir,
             hf_repo_id=export_config.hf_repo_id,
             export_format=export_config.format,
-            quantization=export_config.quantization,
         )
 
         # The model has already been saved locally by our export logic above
-        artifact = storage_strategy.save_model(
+        primary_artifact = storage_strategy.save_model(
             actual_temp_dir,  # Local directory containing saved files
             metadata,
         )
-        storage_strategy.cleanup(artifact)
-        job_tracker.completed(artifact.remote_path, artifact.base_model_id, metrics)
-        return artifact
+
+        # Save GGUF if it was created
+        gguf_artifact = None
+        if gguf_file_path:
+            gguf_metadata = CloudStoredModelMetadata(
+                job_id=job_id,
+                base_model_id=base_model_id,
+                gcs_prefix="",  # Will be set by storage service
+                provider=provider,
+                local_dir=os.path.dirname(gguf_file_path),
+                hf_repo_id=export_config.hf_repo_id,
+                export_format="gguf",  # this specified the bucket prefix
+            )
+
+            # Use save_file for single GGUF file upload
+            gguf_artifact = storage_strategy.save_file(
+                gguf_file_path,  # Direct path to GGUF file
+                gguf_metadata,
+            )
+
+        # Cleanup storage artifacts
+        storage_strategy.cleanup(primary_artifact)
+        if gguf_artifact:
+            storage_strategy.cleanup(gguf_artifact)
+
+        # Mark job as completed with primary artifact path
+        # Note: We're keeping the existing interface for now, but could extend to include GGUF path
+        job_tracker.completed(
+            primary_artifact.remote_path,
+            primary_artifact.base_model_id,
+            metrics,
+            gguf_path=gguf_artifact.remote_path if gguf_artifact else None,
+        )
+
+        return primary_artifact, gguf_artifact
 
     except Exception as e:
         logging.error(f"Error during model export: {e}")
@@ -280,7 +276,11 @@ def create_compute_metrics(
         """
         Compute evaluation metrics manually (regular mode).
         """
-        predictions, labels = eval_pred
+
+        logits, labels = eval_pred
+        predictions = (
+            np.argmax(logits, axis=-1) if isinstance(logits, np.ndarray) else logits
+        )
         results = {}
 
         # Get loss from eval_pred if available

@@ -52,22 +52,20 @@ class WandbConfig(BaseModel):
 class ExportConfig(BaseModel):
     """Configuration for model export"""
 
-    format: Literal["adapter", "merged", "gguf"] = "adapter"
-    quantization: Optional[
-        Literal[
-            "fp32",  # refers to "f32" in GGUF, i.e. no quantization
-            "fp16",  # refers to "f16" in GGUF, half precision in HF / Unsloth
-            "q8",  # refers to "q8_0" in GGUF and int8 in HF / Unsloth
-            "q4",  # refers to "q4_k_m" in GGUF and fp4 in HF / Unsloth
-            "q5",  # refers to "q5_k_m" in GGUF, only supported in GGUF
-            # below are GGUF quants only work on Unsloth GGUF
-            "not_quantized",
-            "fast_quantized",
-            "quantized",
-        ]
-    ] = "q4"
+    format: Literal["adapter", "merged"] = "adapter"
     destination: Literal["gcs", "hfhub"] = "gcs"
     hf_repo_id: Optional[str] = None
+    # Whether to also export a GGUF version alongside the main format
+    include_gguf: Optional[bool] = False
+    gguf_quantization: Optional[
+        Literal[
+            "none",
+            "f16",
+            "bf16",
+            "q8_0",
+            "q4_k_m",
+        ]
+    ] = None
 
 
 class TrainRequest(BaseModel):

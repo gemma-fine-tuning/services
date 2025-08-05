@@ -56,12 +56,18 @@ class BaseTrainingService(ABC):
         metrics = self._evaluate_if_needed(trainer, eval_dataset)
 
         # 11. Save + record in tracker
-        artifact = self._save_and_track(model, tokenizer, tracker, metrics, req)
+        primary_artifact, gguf_artifact = self._save_and_track(
+            model, tokenizer, tracker, metrics, req
+        )
 
-        return {
-            "adapter_path": artifact.remote_path,
-            "base_model_id": artifact.base_model_id,
+        result = {
+            "adapter_path": primary_artifact.remote_path,
+            "base_model_id": primary_artifact.base_model_id,
         }
+        if gguf_artifact:
+            result["gguf_path"] = gguf_artifact.remote_path
+
+        return result
 
     # --- Hooks to implement in subclasses ---
     @abstractmethod
