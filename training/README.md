@@ -102,44 +102,23 @@ Get training job status.
   "metrics": {
     "accuracy": 0.95,
     "perplexity": 1.23,
-    "eval_loss": 0.156
+    "eval_loss": 0.156,
+    "eval_runtime": 12.34
   },
   "error": "Error message if failed"
 }
 ```
 
-### GET `/get-download-url`
+### GET `/jobs/{job_id}/download/gguf`
 
-Generate a signed URL for downloading files from GCS.
-
-**Parameters:**
-
-- `file_path` (required): Path to the file in GCS bucket (e.g., `gguf_models/job123/model.gguf`)
+Get pre-signed URL from GCS to download GGUF file.
 
 **Response:**
 
 ```json
 {
-  "download_url": "https://storage.googleapis.com/...",
-  "filename": "model.gguf",
-  "expires_at": "2025-08-05T15:30:00Z"
+  "download_url": "https://storage.googleapis.com/bucket/gguf_models/job123/model-q8_0.gguf?..."
 }
-```
-
-**Usage Example:**
-
-```javascript
-// Extract blob path from gguf_path in job status
-const blobPath = job.gguf_path.replace(/^gs:\/\/[^\/]+\//, "");
-
-// Get signed download URL
-const response = await fetch(
-  `/get-download-url?file_path=${encodeURIComponent(blobPath)}`
-);
-const { download_url } = await response.json();
-
-// Download the file
-window.open(download_url, "_blank");
 ```
 
 ### GET `/health`

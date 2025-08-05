@@ -99,6 +99,33 @@ class CloudStorageService:
             )
             raise
 
+    def upload_file(self, local_file_path: str, remote_file_path: str) -> str:
+        """
+        Upload a single file to GCS.
+
+        Args:
+            local_file_path (str): Local path to the file to upload
+            remote_file_path (str): Remote path in GCS where the file will be stored
+                This should include all the prefixes like gguf_models/file_id_here
+
+        Returns:
+            str: GCS URI where the file is stored
+        """
+        try:
+            bucket = self.storage_client.bucket(self.export_bucket)
+
+            # Upload the file
+            blob = bucket.blob(remote_file_path)
+            blob.upload_from_filename(local_file_path)
+
+            return f"gs://{self.export_bucket}/{remote_file_path}"
+        except Exception as e:
+            logger.error(
+                f"Error uploading file {local_file_path} to GCS: {e}",
+                exc_info=True,
+            )
+            raise
+
     def download_model(
         self, path: str, local_dir: Optional[str] = None
     ) -> CloudStoredModelMetadata:
@@ -319,18 +346,16 @@ class ModelStorageStrategy(ABC):
         pass
 
     @abstractmethod
-    def save_file(
-        self, local_file_path: str, metadata: CloudStoredModelMetadata
-    ) -> ModelArtifact:
+    def save_file(self, local_file_path: str, remote_path_or_repo_id: str) -> str:
         """
         Upload a single file to storage backend.
 
         Args:
             local_file_path: Local path to the file (e.g., GGUF file)
-            metadata: Dictionary containing job_id, base_model_id, and storage-specific config
+            remote_path_or_repo_id: remote path in the export bucket or hf repo id
 
         Returns:
-            ModelArtifact: Artifact reference with paths and metadata
+            str: GCS URI or hugging face repo and file path to the uploaded file
         """
         pass
 
@@ -396,67 +421,18 @@ class GCSStorageStrategy(ModelStorageStrategy):
             },
         )
 
-    def save_file(
-        self, local_file_path: str, metadata: CloudStoredModelMetadata
-    ) -> ModelArtifact:
+    def save_file(self, local_file_path: str, remote_path_or_repo_id: str) -> str:
         """
         Upload a single file to GCS.
 
         Args:
             local_file_path: Local path to the file (e.g., GGUF file)
-            metadata: Must contain job_id, base_model_id, and export_format
+            remote_path_or_repo_id: Remote path in GCS where the file will be stored
 
         Returns:
-            ModelArtifact: Reference to the uploaded file with GCS paths
+            str: GCS URI where the file is stored
         """
-        try:
-            bucket = self.storage_client.bucket(self.storage_service.export_bucket)
-
-            # Determine folder prefix based on export format
-            format_prefix = self.storage_service._get_format_prefix(
-                metadata.export_format
-            )
-            file_name = os.path.basename(local_file_path)
-            blob_path = f"{format_prefix}/{metadata.job_id}/{file_name}"
-
-            # Upload the file
-            blob = bucket.blob(blob_path)
-            blob.upload_from_filename(local_file_path)
-
-            # Upload metadata
-            meta_dict = {
-                "job_id": metadata.job_id,
-                "base_model_id": metadata.base_model_id,
-                "provider": metadata.provider,
-                "export_format": metadata.export_format,
-                "file_name": file_name,
-            }
-            meta_blob = bucket.blob(
-                f"{format_prefix}/{metadata.job_id}/file_metadata.json"
-            )
-            meta_blob.upload_from_string(
-                json.dumps(meta_dict), content_type="application/json"
-            )
-
-            remote_path = f"gs://{self.storage_service.export_bucket}/{blob_path}"
-
-            return ModelArtifact(
-                base_model_id=metadata.base_model_id,
-                job_id=metadata.job_id,
-                local_path=local_file_path,
-                remote_path=remote_path,
-                provider=metadata.provider,
-                metadata={
-                    "export_format": metadata.export_format,
-                    "file_name": file_name,
-                },
-            )
-        except Exception as e:
-            logger.error(
-                f"Error uploading file to GCS for job {metadata.job_id}: {e}",
-                exc_info=True,
-            )
-            raise
+        return self.storage_service.upload_file(local_file_path, remote_path_or_repo_id)
 
     def load_model_info(self, adapter_path: str) -> ModelArtifact:
         """Load model from GCS"""
@@ -528,28 +504,27 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
             metadata={"hf_repo_id": hf_repo_id},
         )
 
-    def save_file(
-        self, local_file_path: str, metadata: CloudStoredModelMetadata
-    ) -> ModelArtifact:
+    def save_file(self, local_file_path: str, remote_path_or_repo_id: str) -> str:
         """
         Upload a single file to HuggingFace Hub repository.
 
         Args:
             local_file_path: Local path to the file (e.g., GGUF file)
-            metadata: Must contain hf_repo_id, job_id, base_model_id
+            remote_file_path: HF repo id where this file will be stored
 
         Returns:
-            ModelArtifact: Reference to the uploaded file
+            str: Remote path in HuggingFace Hub where the file is stored
         """
-        hf_repo_id = metadata.hf_repo_id
         file_name = os.path.basename(local_file_path)
-        logging.info(f"Uploading file {file_name} to HuggingFace Hub: {hf_repo_id}")
+        logging.info(
+            f"Uploading file {file_name} to HuggingFace Hub: {remote_path_or_repo_id}"
+        )
 
         try:
             api = HfApi()
             # Create repo if it doesn't exist
             api.create_repo(
-                repo_id=hf_repo_id,
+                repo_id=remote_path_or_repo_id,
                 repo_type="model",
                 private=True,
                 exist_ok=True,
@@ -558,24 +533,14 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
             api.upload_file(
                 path_or_fileobj=local_file_path,
                 path_in_repo=file_name,
-                repo_id=hf_repo_id,
+                repo_id=remote_path_or_repo_id,
                 repo_type="model",
             )
         except Exception as e:
             logging.error(f"Failed to upload file to HuggingFace Hub: {e}")
             raise
 
-        return ModelArtifact(
-            base_model_id=metadata.base_model_id,
-            job_id=metadata.job_id,
-            local_path=local_file_path,
-            remote_path=f"{hf_repo_id}/{file_name}",
-            provider=metadata.provider,
-            metadata={
-                "hf_repo_id": hf_repo_id,
-                "file_name": file_name,
-            },
-        )
+        return f"{remote_path_or_repo_id}/{file_name}"
 
     def load_model_info(self, repo_id: str) -> ModelArtifact:
         """

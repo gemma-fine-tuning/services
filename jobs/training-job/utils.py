@@ -200,45 +200,34 @@ def save_and_track(
         )
 
         # The model has already been saved locally by our export logic above
-        primary_artifact = storage_strategy.save_model(
+        artifact = storage_strategy.save_model(
             actual_temp_dir,  # Local directory containing saved files
             metadata,
         )
 
-        # Save GGUF if it was created
-        gguf_artifact = None
         if gguf_file_path:
-            gguf_metadata = CloudStoredModelMetadata(
-                job_id=job_id,
-                base_model_id=base_model_id,
-                gcs_prefix="",  # Will be set by storage service
-                provider=provider,
-                local_dir=os.path.dirname(gguf_file_path),
-                hf_repo_id=export_config.hf_repo_id,
-                export_format="gguf",  # this specified the bucket prefix
-            )
-
-            # Use save_file for single GGUF file upload
-            gguf_artifact = storage_strategy.save_file(
+            # Use save_file for single GGUF file upload, destination is always same as model
+            # NOTE: remote path at GCS is always gguf_models/{job_id}/{filename}
+            # This is for easier access given a job_id
+            gguf_remote_path = storage_strategy.save_file(
                 gguf_file_path,  # Direct path to GGUF file
-                gguf_metadata,
+                f"gguf_models/{job_id}/{os.path.basename(gguf_file_path)}"
+                if export_config.destination == "gcs"
+                else export_config.hf_repo_id,
             )
 
         # Cleanup storage artifacts
-        storage_strategy.cleanup(primary_artifact)
-        if gguf_artifact:
-            storage_strategy.cleanup(gguf_artifact)
+        storage_strategy.cleanup(artifact)
 
         # Mark job as completed with primary artifact path
-        # Note: We're keeping the existing interface for now, but could extend to include GGUF path
         job_tracker.completed(
-            primary_artifact.remote_path,
-            primary_artifact.base_model_id,
+            artifact.remote_path,
+            artifact.base_model_id,
             metrics,
-            gguf_path=gguf_artifact.remote_path if gguf_artifact else None,
+            gguf_path=gguf_remote_path if gguf_file_path else None,
         )
 
-        return primary_artifact, gguf_artifact
+        return artifact
 
     except Exception as e:
         logging.error(f"Error during model export: {e}")

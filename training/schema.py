@@ -127,5 +127,3 @@ class JobListResponse(BaseModel):
 
 class DownloadUrlResponse(BaseModel):
     download_url: str
-    filename: Optional[str] = None
-    expires_at: Optional[str] = None

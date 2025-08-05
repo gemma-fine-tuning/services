@@ -1,6 +1,6 @@
 import os
 import logging
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from google.cloud import run_v2
 from google.cloud import storage
 from datetime import timedelta, datetime, timezone
@@ -159,47 +159,6 @@ async def start_training(request: TrainRequest):
         )
 
 
-@app.get("/get-download-url", response_model=DownloadUrlResponse)
-async def generate_signed_url(
-    file_path: str = Query(..., description="Path to the file in GCS bucket"),
-):
-    """
-    Generates a signed URL for a GCS object.
-    Expects a 'file_path' query parameter, e.g.,
-    /get-download-url?file_path=gguf_models/your_model.gguf
-    """
-    if not file_path:
-        raise HTTPException(status_code=400, detail="Missing 'file_path' parameter")
-
-    try:
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(GCS_EXPORT_BUCKET)
-        blob = bucket.blob(file_path)
-
-        if not blob.exists():
-            raise HTTPException(status_code=404, detail="File not found")
-
-        # Generate a signed URL that is valid for 15 minutes
-        expiration_time = datetime.now(timezone.utc) + timedelta(minutes=15)
-        signed_url = blob.generate_signed_url(
-            version="v4",
-            expiration=timedelta(minutes=15),
-            method="GET",
-        )
-
-        return DownloadUrlResponse(
-            download_url=signed_url,
-            filename=os.path.basename(file_path),
-            expires_at=expiration_time.isoformat(),
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Failed to generate signed URL: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.get("/jobs/{job_id}/download/gguf", response_model=DownloadUrlResponse)
 async def download_gguf_file(job_id: str):
     """
@@ -247,18 +206,13 @@ async def download_gguf_file(job_id: str):
             )
 
         # Generate a signed URL that is valid for 1 hour
-        expiration_time = datetime.now(timezone.utc) + timedelta(hours=1)
         signed_url = blob.generate_signed_url(
             version="v4",
-            expiration=timedelta(hours=1),
+            expiration=timedelta(minutes=30),
             method="GET",
         )
 
-        return DownloadUrlResponse(
-            download_url=signed_url,
-            filename=os.path.basename(blob_path),
-            expires_at=expiration_time.isoformat(),
-        )
+        return DownloadUrlResponse(download_url=signed_url)
 
     except HTTPException:
         raise
@@ -267,6 +221,9 @@ async def download_gguf_file(job_id: str):
             f"Failed to generate GGUF download URL for job {job_id}: {str(e)}"
         )
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# NOTE: In the future we might want to add /jobs/{job_id}/download/model endpoint for adapter and merged models
 
 
 @app.get("/jobs/{job_id}/status", response_model=JobStatusResponse)
