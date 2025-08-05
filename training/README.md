@@ -27,7 +27,6 @@ Start a new training job.
   "processed_dataset_id": "dataset_abc123",
   "job_name": "My Training Job",
   "hf_token": "hf_...",
-  "modality": "text" | "vision",
   "training_config": {
     "method": "LoRA" | "QLoRA" | "Full" | "RL",
     "base_model_id": "google/gemma-2b",
@@ -36,9 +35,10 @@ Start a new training job.
     "epochs": 3,
     "gradient_accumulation_steps": 4,
     "provider": "unsloth" | "huggingface",
+    "modality": "text" | "vision",
     "eval_strategy": "no" | "steps" | "epoch",
     "eval_steps": 50,
-    "evaluation_metrics": ["accuracy", "perplexity"],
+    "evaluation_metrics": true,
     "batch_eval_metrics": false
   },
   "export_config": {

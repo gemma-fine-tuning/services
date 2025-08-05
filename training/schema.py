@@ -62,6 +62,9 @@ class TrainingConfig(BaseModel):
 
     provider: Literal["unsloth", "huggingface"] = "huggingface"
 
+    # Vision training configuration
+    modality: Literal["text", "vision"] = "text"
+
     max_seq_length: Optional[int] = None  # used to load pretrained models
     lr_scheduler_type: Optional[str] = "linear"
     save_strategy: Optional[str] = "epoch"
@@ -71,8 +74,9 @@ class TrainingConfig(BaseModel):
     eval_strategy: Optional[str] = "no"  # "no", "steps", "epoch"
     eval_steps: Optional[int] = 50  # Required if eval_strategy="steps"
 
-    # Metrics configuration
-    evaluation_metrics: Optional[List[str]] = ["accuracy", "perplexity"]
+    # Metrics configuration, otherwise eval only returns eval loss etc.
+    # if true returns computed metrics ["accuracy", "perplexity"]
+    compute_eval_metrics: Optional[bool] = False
     # Set to True to enable batch evaluation mode for metrics computation
     batch_eval_metrics: Optional[bool] = False
 
@@ -91,11 +95,6 @@ class TrainRequest(BaseModel):
     job_name: str = "unnamed job"
     training_config: TrainingConfig
     export_config: ExportConfig
-
-    # TODO: Duplicate field with TrainingConfig, consider refactoring
-    modality: Literal["text", "vision"] = "text"
-
-    # Weights & Biases logging configuration
     wandb_config: Optional[WandbConfig] = None
 
 

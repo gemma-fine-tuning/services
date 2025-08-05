@@ -77,9 +77,4 @@ class TrainRequest(BaseModel):
     job_name: str = "unnamed job"
     training_config: TrainingConfig
     export_config: ExportConfig
-
-    # TODO: Duplicate field with TrainingConfig, consider refactoring
-    modality: Literal["text", "vision"] = "text"
-
-    # Weights & Biases logging configuration
     wandb_config: Optional[WandbConfig] = None

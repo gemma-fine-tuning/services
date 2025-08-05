@@ -53,6 +53,8 @@ gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
 
 **Training Config:**
 
+> NOTE: This is completely identically shared with `TrainRequest` and `TrainConfig` from `training/README.md`
+
 ```json
 {
   "processed_dataset_id": "dataset_abc123",
