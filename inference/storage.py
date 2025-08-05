@@ -476,9 +476,9 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
             ModelArtifact: Model metadata for inference setup
         """
         try:
-            # Try adapter config first
+            # Try adapter config first, this will raise EntryNotFoundError if file not found
             adapter_config_path = hf_hub_download(
-                repo_id=repo_id, filename="adapter_config.json"
+                repo_id=repo_id, repo_type="model", filename="adapter_config.json"
             )
             with open(adapter_config_path, "r") as f:
                 adapter_config = json.load(f)
@@ -486,8 +486,8 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
             provider = (
                 "unsloth" if base_model_id.startswith("unsloth/") else "huggingface"
             )
-        except Exception:
-            logging.warning(
+        except Exception:  # This will happen if it's not an adapter (i.e. merged model)
+            logging.info(
                 f"Failed to load adapter config for {repo_id}, falling back to repo_id as model_id"
             )
             base_model_id = repo_id

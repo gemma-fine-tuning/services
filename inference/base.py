@@ -179,7 +179,9 @@ class InferenceOrchestrator:
             else:  # hfhub
                 artifact = strategy.load_model_info(adapter_path)
                 final_adapter_path = artifact.remote_path
-                provider_key = artifact.provider
+                provider_key = (
+                    "unsloth" if base_model_id.startswith("unsloth/") else "huggingface"
+                )
 
         # Determine modality and provider
         modality = infer_modality_from_messages(messages)
