@@ -33,6 +33,7 @@ class JobMetadata:
     wandb_url: Optional[str] = None
     metrics: Optional[EvaluationMetrics] = None
     error: Optional[str] = None
+    gguf_path: Optional[str] = None
 
 
 class JobStateManager:
@@ -83,6 +84,7 @@ class JobStateManager:
                 wandb_url=data.get("wandb_url"),
                 metrics=data.get("metrics"),
                 error=data.get("error"),
+                gguf_path=data.get("gguf_path"),
             )
         except Exception as e:
             self.logger.error(f"Failed to get job {job_id}: {e}")
@@ -115,6 +117,7 @@ class JobStateManager:
             "wandb_url": job.wandb_url,
             "metrics": job.metrics,
             "error": job.error,
+            "gguf_path": job.gguf_path,
         }
         return status_dict
 
@@ -151,6 +154,7 @@ class JobStateManager:
                     "adapter_path": job_metadata.adapter_path,
                     "wandb_url": job_metadata.wandb_url,
                     "error": job_metadata.error,
+                    "gguf_path": job_metadata.gguf_path,
                 }
             )
 

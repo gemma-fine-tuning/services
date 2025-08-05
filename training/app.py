@@ -1,19 +1,20 @@
 import os
 import logging
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from google.cloud import run_v2
 from google.cloud import storage
+from datetime import timedelta, datetime, timezone
 from schema import (
     TrainRequest,
     JobSubmitResponse,
     JobStatusResponse,
     JobListResponse,
     JobListEntry,
+    DownloadUrlResponse,
 )
 import json
 import uvicorn
 import hashlib
-from datetime import datetime, timezone
 from job_manager import JobStateManager, JobMetadata, JobStatus
 
 app = FastAPI(
@@ -37,6 +38,7 @@ job_manager = JobStateManager(project_id)
 REGION = os.getenv("REGION", "us-central1")
 JOB_NAME = os.getenv("TRAINING_JOB_NAME", "training-job")
 GCS_CONFIG_BUCKET = os.getenv("GCS_CONFIG_BUCKET_NAME", "gemma-train-config")
+GCS_EXPORT_BUCKET = os.getenv("GCS_EXPORT_BUCKET_NAME", "gemma-export-bucket")
 
 
 @app.get("/health")
@@ -155,6 +157,116 @@ async def start_training(request: TrainRequest):
         raise HTTPException(
             status_code=500, detail=f"Failed to start training job: {str(e)}"
         )
+
+
+@app.get("/get-download-url", response_model=DownloadUrlResponse)
+async def generate_signed_url(
+    file_path: str = Query(..., description="Path to the file in GCS bucket"),
+):
+    """
+    Generates a signed URL for a GCS object.
+    Expects a 'file_path' query parameter, e.g.,
+    /get-download-url?file_path=gguf_models/your_model.gguf
+    """
+    if not file_path:
+        raise HTTPException(status_code=400, detail="Missing 'file_path' parameter")
+
+    try:
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(GCS_EXPORT_BUCKET)
+        blob = bucket.blob(file_path)
+
+        if not blob.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+
+        # Generate a signed URL that is valid for 15 minutes
+        expiration_time = datetime.now(timezone.utc) + timedelta(minutes=15)
+        signed_url = blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(minutes=15),
+            method="GET",
+        )
+
+        return DownloadUrlResponse(
+            download_url=signed_url,
+            filename=os.path.basename(file_path),
+            expires_at=expiration_time.isoformat(),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Failed to generate signed URL: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/jobs/{job_id}/download/gguf", response_model=DownloadUrlResponse)
+async def download_gguf_file(job_id: str):
+    """
+    Generate a signed URL for downloading the GGUF file of a specific job.
+    This is a convenience endpoint that automatically finds the GGUF file path from job status.
+    """
+    try:
+        # Get job status to find GGUF path
+        job_data = job_manager.get_job_status_dict(job_id)
+        if not job_data:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        gguf_path = job_data.get("gguf_path")
+        if not gguf_path:
+            raise HTTPException(
+                status_code=404,
+                detail="No GGUF file available for this job. Check if include_gguf was enabled during training.",
+            )
+
+        # Extract the blob path from the GCS URL
+        # gguf_path format: gs://bucket/gguf_models/job_123/model.gguf
+        if not gguf_path.startswith("gs://"):
+            raise HTTPException(status_code=500, detail="Invalid GGUF path format")
+
+        # Remove gs://bucket/ prefix to get blob path
+        path_parts = gguf_path.replace("gs://", "").split("/", 1)
+        if len(path_parts) != 2:
+            raise HTTPException(status_code=500, detail="Invalid GGUF path format")
+
+        bucket_name, blob_path = path_parts
+
+        # Verify it's the expected bucket
+        if bucket_name != GCS_EXPORT_BUCKET:
+            raise HTTPException(
+                status_code=500, detail="GGUF file in unexpected bucket"
+            )
+
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(GCS_EXPORT_BUCKET)
+        blob = bucket.blob(blob_path)
+
+        if not blob.exists():
+            raise HTTPException(
+                status_code=404, detail="GGUF file not found in storage"
+            )
+
+        # Generate a signed URL that is valid for 1 hour
+        expiration_time = datetime.now(timezone.utc) + timedelta(hours=1)
+        signed_url = blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(hours=1),
+            method="GET",
+        )
+
+        return DownloadUrlResponse(
+            download_url=signed_url,
+            filename=os.path.basename(blob_path),
+            expires_at=expiration_time.isoformat(),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(
+            f"Failed to generate GGUF download URL for job {job_id}: {str(e)}"
+        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/jobs/{job_id}/status", response_model=JobStatusResponse)

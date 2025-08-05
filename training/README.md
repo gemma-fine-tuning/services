@@ -42,10 +42,12 @@ Start a new training job.
     "batch_eval_metrics": false
   },
   "export_config": {
-    "format": "adapter" | "merged" | "gguf",
-    "quantization": "none" | "fp16" | "q4" | "f16" | "q8_0" | "q4_k_m" | "q5_k_m" | "q2_k",
+    "format": "adapter" | "merged",
+    "quantization": "none" | "f16" | "bf16" | "q8_0" | "q4_k_m",
     "destination": "gcs" | "hfhub",
-    "hf_repo_id": "user/model-name"
+    "hf_repo_id": "user/model-name",
+    "include_gguf": false,
+    "gguf_quantization": "none" | "f16" | "bf16" | "q8_0" | "q4_k_m"
   },
   "wandb_config": {
     "api_key": "wandb_...",
@@ -94,15 +96,82 @@ Get training job status.
   "status": "queued" | "preparing" | "training" | "completed" | "failed",
   "modality": "text" | "vision",
   "wandb_url": "https://wandb.ai/...",
-  "adapter_path": "gs://bucket/adapters/job123/ or gs://bucket/merged_models/job123/",
+  "adapter_path": "gs://bucket/trained_adapters/job123/ or gs://bucket/merged_models/job123/",
   "base_model_id": "google/gemma-2b",
+  "gguf_path": "gs://bucket/gguf_models/job123/model-q8_0.gguf",
+  "metrics": {
+    "accuracy": 0.95,
+    "perplexity": 1.23,
+    "eval_loss": 0.156
+  },
   "error": "Error message if failed"
 }
+```
+
+### GET `/get-download-url`
+
+Generate a signed URL for downloading files from GCS.
+
+**Parameters:**
+
+- `file_path` (required): Path to the file in GCS bucket (e.g., `gguf_models/job123/model.gguf`)
+
+**Response:**
+
+```json
+{
+  "download_url": "https://storage.googleapis.com/...",
+  "filename": "model.gguf",
+  "expires_at": "2025-08-05T15:30:00Z"
+}
+```
+
+**Usage Example:**
+
+```javascript
+// Extract blob path from gguf_path in job status
+const blobPath = job.gguf_path.replace(/^gs:\/\/[^\/]+\//, "");
+
+// Get signed download URL
+const response = await fetch(
+  `/get-download-url?file_path=${encodeURIComponent(blobPath)}`
+);
+const { download_url } = await response.json();
+
+// Download the file
+window.open(download_url, "_blank");
 ```
 
 ### GET `/health`
 
 Health check endpoint.
+
+## Export Configuration
+
+The export configuration now supports:
+
+- **Primary Format**: Choose between `adapter` or `merged` model formats
+- **Optional GGUF**: Set `include_gguf: true` to also export a GGUF file alongside the primary model
+- **Separate Quantization**: Use `gguf_quantization` to specify different quantization for GGUF files
+
+### Example: Adapter with GGUF Export
+
+```json
+{
+  "export_config": {
+    "format": "adapter",
+    "quantization": "q4_k_m",
+    "destination": "gcs",
+    "include_gguf": true,
+    "gguf_quantization": "q8_0"
+  }
+}
+```
+
+This will export both:
+
+- Primary adapter model with q4_k_m quantization
+- GGUF file with q8_0 quantization
 
 ## Job Lifecycle
 

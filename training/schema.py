@@ -5,28 +5,20 @@ from typing import Literal, Optional, List
 class ExportConfig(BaseModel):
     """Configuration for model export"""
 
-    format: Literal["adapter", "merged", "gguf"] = "adapter"
-    quantization: Optional[
-        Literal[
-            # For merged models
-            "none",
-            "fp16",
-            # "q8",
-            "q4",
-            # TODO: For now we don't check this we assume the frontend is aware of valid config
-            # for GGUF format (Unsloth)
-            "f16",
-            "not_quantized",
-            "fast_quantized",
-            "quantized",
-            "q8_0",
-            "q4_k_m",  # recommended for Unsloth
-            "q5_k_m",  # recommended for Unsloth
-            "q2_k",
-        ]
-    ] = "none"
+    format: Literal["adapter", "merged"] = "adapter"
     destination: Literal["gcs", "hfhub"] = "gcs"
     hf_repo_id: Optional[str] = None
+    # Whether to also export a GGUF version alongside the main format
+    include_gguf: Optional[bool] = False
+    gguf_quantization: Optional[
+        Literal[
+            "none",
+            "f16",
+            "bf16",
+            "q8_0",
+            "q4_k_m",
+        ]
+    ] = None
 
 
 class EvaluationMetrics(BaseModel):
@@ -38,6 +30,7 @@ class EvaluationMetrics(BaseModel):
     accuracy: Optional[float] = None
     perplexity: Optional[float] = None
     eval_loss: Optional[float] = None
+    eval_runtime: Optional[float] = None
 
 
 class TrainingConfig(BaseModel):
@@ -110,6 +103,8 @@ class JobStatusResponse(BaseModel):
     processed_dataset_id: Optional[str] = None
     adapter_path: Optional[str] = None
     base_model_id: Optional[str] = None
+    # Path to GGUF file if it was exported alongside the main model
+    gguf_path: Optional[str] = None
     # Evaluation metrics recorded after training
     metrics: Optional[EvaluationMetrics] = None
     error: Optional[str] = None
@@ -128,3 +123,9 @@ class JobListEntry(BaseModel):
 
 class JobListResponse(BaseModel):
     jobs: List[JobListEntry]
+
+
+class DownloadUrlResponse(BaseModel):
+    download_url: str
+    filename: Optional[str] = None
+    expires_at: Optional[str] = None
