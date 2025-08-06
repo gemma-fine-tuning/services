@@ -1,9 +1,8 @@
 import os
 import json
 import sys
-from google.cloud import firestore
 from google.cloud import storage
-from training_service import TrainingService
+from providers import TrainingService
 from job_manager import JobStateManager, JobTracker
 from schema import TrainRequest
 from huggingface_hub import login
@@ -102,8 +101,7 @@ def main():
         raise ValueError(
             "PROJECT_ID environment variable must be set for Firestore client"
         )
-    db = firestore.Client(project=project_id)
-    job_manager = JobStateManager(db)
+    job_manager = JobStateManager(project_id=project_id)
 
     try:
         # Use JobTracker context manager for automatic status transitions
@@ -112,7 +110,7 @@ def main():
             train_req = TrainRequest.model_validate(train_request)
             service = TrainingService.from_provider(train_req.training_config.provider)
             # We don't need to return anything because they are saved by the tracker internally to firestore already
-            _ = service.run_training(train_req, job_tracker=tracker)
+            _ = service.run_training(train_req, tracker)
     except Exception as e:
         logging.error(f"Training job {job_id} failed: {str(e)}", exc_info=True)
         # Exception handling is done by JobTracker context manager

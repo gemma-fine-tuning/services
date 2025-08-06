@@ -291,28 +291,6 @@ wheels = [
 ]
 
 [[package]]
-name = "evaluate"
-version = "0.4.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "datasets" },
-    { name = "dill" },
-    { name = "fsspec", extra = ["http"] },
-    { name = "huggingface-hub" },
-    { name = "multiprocess" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "pandas" },
-    { name = "requests" },
-    { name = "tqdm" },
-    { name = "xxhash" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5a/a0/10a56e0939ece94c54276e81459cb4101f46f0e9a6f54fc31a35f64e8854/evaluate-0.4.3.tar.gz", hash = "sha256:3a5700cf83aabee9549264e1e5666f116367c61dbd4d38352015e859a5e2098d", size = 65679, upload_time = "2024-09-11T10:15:32Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a2/e7/cbca9e2d2590eb9b5aa8f7ebabe1beb1498f9462d2ecede5c9fd9735faaf/evaluate-0.4.3-py3-none-any.whl", hash = "sha256:47d8770bdea76e2c2ed0d40189273027d1a41ccea861bcc7ba12d30ec5d1e517", size = 84010, upload_time = "2024-09-11T10:15:30.018Z" },
-]
-
-[[package]]
 name = "fastapi"
 version = "0.104.1"
 source = { registry = "https://pypi.org/simple" }
@@ -418,7 +396,6 @@ dependencies = [
     { name = "accelerate" },
     { name = "bitsandbytes" },
     { name = "datasets" },
-    { name = "evaluate" },
     { name = "fastapi" },
     { name = "google-cloud-firestore" },
     { name = "google-cloud-storage" },
@@ -426,8 +403,7 @@ dependencies = [
     { name = "peft" },
     { name = "pillow" },
     { name = "torch" },
-    { name = "transformers", version = "4.51.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13' and sys_platform != 'linux'" },
-    { name = "transformers", version = "4.53.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13' or sys_platform == 'linux'" },
+    { name = "transformers" },
     { name = "trl" },
     { name = "unsloth" },
     { name = "unsloth-zoo" },
@@ -438,10 +414,9 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "accelerate", specifier = "==1.4.0" },
+    { name = "accelerate", specifier = ">=1.4.0" },
     { name = "bitsandbytes", specifier = "==0.45.3" },
     { name = "datasets", specifier = ">=3.4.1" },
-    { name = "evaluate", specifier = "==0.4.3" },
     { name = "fastapi", specifier = "==0.104.1" },
     { name = "google-cloud-firestore", specifier = ">=2.11.0" },
     { name = "google-cloud-storage", specifier = "==2.10.0" },
@@ -450,9 +425,9 @@ requires-dist = [
     { name = "pillow", specifier = ">=10.0.0" },
     { name = "torch", specifier = ">=2.6.0", index = "https://download.pytorch.org/whl/cu124" },
     { name = "transformers", specifier = ">=4.50.0" },
-    { name = "trl", specifier = "==0.15.2" },
-    { name = "unsloth", specifier = "==2025.6.12" },
-    { name = "unsloth-zoo", specifier = "==2025.6.8" },
+    { name = "trl", specifier = ">=0.15.2" },
+    { name = "unsloth", specifier = ">=2025.8.1" },
+    { name = "unsloth-zoo", specifier = ">=2025.8.1" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.24.0" },
     { name = "wandb" },
     { name = "xformers", specifier = "==0.0.29.post3" },
@@ -728,7 +703,7 @@ wheels = [
 
 [[package]]
 name = "huggingface-hub"
-version = "0.33.1"
+version = "0.34.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
@@ -740,9 +715,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a4/01/bfe0534a63ce7a2285e90dbb33e8a5b815ff096d8f7743b135c256916589/huggingface_hub-0.33.1.tar.gz", hash = "sha256:589b634f979da3ea4b8bdb3d79f97f547840dc83715918daf0b64209c0844c7b", size = 426728, upload_time = "2025-06-25T12:02:57.605Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/91/b4/e6b465eca5386b52cf23cb6df8644ad318a6b0e12b4b96a7e0be09cbfbcc/huggingface_hub-0.34.3.tar.gz", hash = "sha256:d58130fd5aa7408480681475491c0abd7e835442082fbc3ef4d45b6c39f83853", size = 456800, upload_time = "2025-07-29T08:38:53.885Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d0/fb/5307bd3612eb0f0e62c3a916ae531d3a31e58fb5c82b58e3ebf7fd6f47a1/huggingface_hub-0.33.1-py3-none-any.whl", hash = "sha256:ec8d7444628210c0ba27e968e3c4c973032d44dcea59ca0d78ef3f612196f095", size = 515377, upload_time = "2025-06-25T12:02:55.611Z" },
+    { url = "https://files.pythonhosted.org/packages/59/a8/4677014e771ed1591a87b63a2392ce6923baf807193deef302dcfde17542/huggingface_hub-0.34.3-py3-none-any.whl", hash = "sha256:5444550099e2d86e68b2898b09e85878fbd788fc2957b506c6a79ce060e39492", size = 558847, upload_time = "2025-07-29T08:38:51.904Z" },
 ]
 
 [[package]]
@@ -1172,8 +1147,7 @@ dependencies = [
     { name = "safetensors" },
     { name = "torch" },
     { name = "tqdm" },
-    { name = "transformers", version = "4.51.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13' and sys_platform != 'linux'" },
-    { name = "transformers", version = "4.53.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13' or sys_platform == 'linux'" },
+    { name = "transformers" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/21/33/fb0c31eaa8162c01e9250b21aa65d46a5339f17a818a97c68391db2ff44b/peft-0.14.0.tar.gz", hash = "sha256:546d69af7b42f5ef715a3d3261ed818bc917ae6055e5d7e187ed3f2c76ad72dc", size = 411902, upload_time = "2024-12-06T11:37:44.258Z" }
 wheels = [
@@ -1822,50 +1796,21 @@ wheels = [
 name = "transformers"
 version = "4.51.3"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform != 'linux'",
-]
 dependencies = [
-    { name = "filelock", marker = "python_full_version >= '3.13' and sys_platform != 'linux'" },
-    { name = "huggingface-hub", marker = "python_full_version >= '3.13' and sys_platform != 'linux'" },
-    { name = "numpy", marker = "python_full_version >= '3.13' and sys_platform != 'linux'" },
-    { name = "packaging", marker = "python_full_version >= '3.13' and sys_platform != 'linux'" },
-    { name = "pyyaml", marker = "python_full_version >= '3.13' and sys_platform != 'linux'" },
-    { name = "regex", marker = "python_full_version >= '3.13' and sys_platform != 'linux'" },
-    { name = "requests", marker = "python_full_version >= '3.13' and sys_platform != 'linux'" },
-    { name = "safetensors", marker = "python_full_version >= '3.13' and sys_platform != 'linux'" },
-    { name = "tokenizers", marker = "python_full_version >= '3.13' and sys_platform != 'linux'" },
-    { name = "tqdm", marker = "python_full_version >= '3.13' and sys_platform != 'linux'" },
+    { name = "filelock" },
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "pyyaml" },
+    { name = "regex" },
+    { name = "requests" },
+    { name = "safetensors" },
+    { name = "tokenizers" },
+    { name = "tqdm" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f1/11/7414d5bc07690002ce4d7553602107bf969af85144bbd02830f9fb471236/transformers-4.51.3.tar.gz", hash = "sha256:e292fcab3990c6defe6328f0f7d2004283ca81a7a07b2de9a46d67fd81ea1409", size = 8941266, upload_time = "2025-04-14T08:15:00.485Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/b6/5257d04ae327b44db31f15cce39e6020cc986333c715660b1315a9724d82/transformers-4.51.3-py3-none-any.whl", hash = "sha256:fd3279633ceb2b777013234bbf0b4f5c2d23c4626b05497691f00cfda55e8a83", size = 10383940, upload_time = "2025-04-14T08:13:43.023Z" },
-]
-
-[[package]]
-name = "transformers"
-version = "4.53.0"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform == 'linux'",
-    "python_full_version < '3.13' and sys_platform == 'linux'",
-    "python_full_version < '3.13' and sys_platform != 'linux'",
-]
-dependencies = [
-    { name = "filelock", marker = "python_full_version < '3.13' or sys_platform == 'linux'" },
-    { name = "huggingface-hub", marker = "python_full_version < '3.13' or sys_platform == 'linux'" },
-    { name = "numpy", marker = "python_full_version < '3.13' or sys_platform == 'linux'" },
-    { name = "packaging", marker = "python_full_version < '3.13' or sys_platform == 'linux'" },
-    { name = "pyyaml", marker = "python_full_version < '3.13' or sys_platform == 'linux'" },
-    { name = "regex", marker = "python_full_version < '3.13' or sys_platform == 'linux'" },
-    { name = "requests", marker = "python_full_version < '3.13' or sys_platform == 'linux'" },
-    { name = "safetensors", marker = "python_full_version < '3.13' or sys_platform == 'linux'" },
-    { name = "tokenizers", marker = "python_full_version < '3.13' or sys_platform == 'linux'" },
-    { name = "tqdm", marker = "python_full_version < '3.13' or sys_platform == 'linux'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/e8/40/f2d2c3bcf5c6135027cab0fd7db52f6149a1c23acc4e45f914c43d362386/transformers-4.53.0.tar.gz", hash = "sha256:f89520011b4a73066fdc7aabfa158317c3934a22e3cd652d7ffbc512c4063841", size = 9177265, upload_time = "2025-06-26T16:10:54.729Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5e/0c/68d03a38f6ab2ba2b2829eb11b334610dd236e7926787f7656001b68e1f2/transformers-4.53.0-py3-none-any.whl", hash = "sha256:7d8039ff032c01a2d7f8a8fe0066620367003275f023815a966e62203f9f5dd7", size = 10821970, upload_time = "2025-06-26T16:10:51.505Z" },
 ]
 
 [[package]]
@@ -1897,8 +1842,7 @@ dependencies = [
     { name = "accelerate" },
     { name = "datasets" },
     { name = "rich" },
-    { name = "transformers", version = "4.51.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13' and sys_platform != 'linux'" },
-    { name = "transformers", version = "4.53.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13' or sys_platform == 'linux'" },
+    { name = "transformers" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/95/fe/ae0d782c48eef56d0ec125ebd05998539ede7cbf0e307a48f9323998b9e7/trl-0.15.2.tar.gz", hash = "sha256:0f82190a058a0a194dbcfae1fe9548b68a0a05b2f4d1824f8db1ae7d949cdd47", size = 333962, upload_time = "2025-02-25T22:34:34.595Z" }
 wheels = [
@@ -1966,7 +1910,7 @@ wheels = [
 
 [[package]]
 name = "unsloth"
-version = "2025.6.12"
+version = "2025.8.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "accelerate" },
@@ -1984,8 +1928,7 @@ dependencies = [
     { name = "torch" },
     { name = "torchvision" },
     { name = "tqdm" },
-    { name = "transformers", version = "4.51.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13' and sys_platform != 'linux'" },
-    { name = "transformers", version = "4.53.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13' or sys_platform == 'linux'" },
+    { name = "transformers" },
     { name = "triton", marker = "sys_platform == 'linux'" },
     { name = "triton-windows", marker = "sys_platform == 'win32'" },
     { name = "trl" },
@@ -1994,14 +1937,14 @@ dependencies = [
     { name = "wheel" },
     { name = "xformers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7b/2a/420da0104f04a5783f825378692ea77b5142a6c76486b95c9af59ec8b394/unsloth-2025.6.12.tar.gz", hash = "sha256:07b18f2822d4a4327fb778fde1eb57d22d320f2def4dea93c4c8e26f62b6620c", size = 253286, upload_time = "2025-07-01T14:04:16.275Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e7/2c/8d89c085c1456a8bfbd3107aa79ed1256612327cc6436ed5dfb783a1c40e/unsloth-2025.8.1.tar.gz", hash = "sha256:86413e7fa6a982296b1349454d645ef0f12f450ef562ea07a5083377f47f15a2", size = 257556, upload_time = "2025-08-02T10:41:17.224Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/78/b5/09bb110a976832ae633c0c454768ed4592e4914a4dbd4b5292074c7fa358/unsloth-2025.6.12-py3-none-any.whl", hash = "sha256:c7b169655b1a87ed5609488e788473927d7d95652353cf36f213c7eebe91d138", size = 294530, upload_time = "2025-07-01T14:04:14.119Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/d0/184903cbcb80b7bbd5c96afedb3e91beafc5df8c1a114b823419d381a3a3/unsloth-2025.8.1-py3-none-any.whl", hash = "sha256:3f3a407f85c084baaca7704b242627556b890f2fdb64ec0d3cb726864616f47e", size = 299780, upload_time = "2025-08-02T10:41:14.996Z" },
 ]
 
 [[package]]
 name = "unsloth-zoo"
-version = "2025.6.8"
+version = "2025.8.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "accelerate" },
@@ -2020,17 +1963,17 @@ dependencies = [
     { name = "sentencepiece" },
     { name = "torch" },
     { name = "tqdm" },
-    { name = "transformers", version = "4.51.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13' and sys_platform != 'linux'" },
-    { name = "transformers", version = "4.53.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13' or sys_platform == 'linux'" },
+    { name = "transformers" },
     { name = "triton", marker = "sys_platform == 'linux'" },
     { name = "triton-windows", marker = "sys_platform == 'win32'" },
     { name = "trl" },
+    { name = "typing-extensions" },
     { name = "tyro" },
     { name = "wheel" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/91/a8/3f8417dedded67ae01863f42af26f140d85bb23fef8752acdcebec8e397f/unsloth_zoo-2025.6.8.tar.gz", hash = "sha256:42a4b99173d661e1cd60d29dfe61032f022e0ac540c5fb44b9d86fa4ac789034", size = 136931, upload_time = "2025-07-01T13:57:07.954Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/37/bc/c710b9da0d70ca1cb324adc3310b9d1ed31dc340956cbb64cbb7412ef57a/unsloth_zoo-2025.8.1.tar.gz", hash = "sha256:02401f77e7496fc03d71460afd51f7d10e71376056ff1e33ca776723237dcb5e", size = 148526, upload_time = "2025-08-02T10:38:43.356Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ea/79/664fa07464c19ca4e4896a34ae96db4299275895d95157f5efca4c339074/unsloth_zoo-2025.6.8-py3-none-any.whl", hash = "sha256:30ddebf282ab521da61808e643c39d1b7d790013afd5da67f4bfd25bae3ddf8d", size = 154176, upload_time = "2025-07-01T13:57:06.762Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/d9/7199031146fbf00eeea1af1b8b9db16c6ec0e86ae86db515eabcedfaa00d/unsloth_zoo-2025.8.1-py3-none-any.whl", hash = "sha256:3dc80e8909072e5812efaca38f965ebb4cdc2c8bd87df9fb0690dc37dcf5003c", size = 166706, upload_time = "2025-08-02T10:38:41.728Z" },
 ]
 
 [[package]]

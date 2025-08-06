@@ -27,7 +27,6 @@ Start a new training job.
   "processed_dataset_id": "dataset_abc123",
   "job_name": "My Training Job",
   "hf_token": "hf_...",
-  "modality": "text" | "vision",
   "training_config": {
     "method": "LoRA" | "QLoRA" | "Full" | "RL",
     "base_model_id": "google/gemma-2b",
@@ -35,10 +34,21 @@ Start a new training job.
     "batch_size": 4,
     "epochs": 3,
     "gradient_accumulation_steps": 4,
-    "provider": "unsloth" | "huggingface"
+    "provider": "unsloth" | "huggingface",
+    "modality": "text" | "vision",
+    "eval_strategy": "no" | "steps" | "epoch",
+    "eval_steps": 50,
+    "evaluation_metrics": true,
+    "batch_eval_metrics": false
   },
-  "export": "gcs" | "hfhub",
-  "hf_repo_id": "user/model-name",
+  "export_config": {
+    "format": "adapter" | "merged",
+    "quantization": "none" | "f16" | "bf16" | "q8_0" | "q4_k_m",
+    "destination": "gcs" | "hfhub",
+    "hf_repo_id": "user/model-name",
+    "include_gguf": false,
+    "gguf_quantization": "none" | "f16" | "bf16" | "q8_0" | "q4_k_m"
+  },
   "wandb_config": {
     "api_key": "wandb_...",
     "project": "my-project"
@@ -66,6 +76,7 @@ List all jobs.
     {
       "job_id": "training_abc123_gemma-2b_def456",
       "job_name": "My Training Job",
+      "base_model_id": "google/gemma-1b-it",
       "status": "queued" | "preparing" | "training" | "completed" | "failed" | "unknown",
       "modality": "text" | "vision",
     }
@@ -85,15 +96,61 @@ Get training job status.
   "status": "queued" | "preparing" | "training" | "completed" | "failed",
   "modality": "text" | "vision",
   "wandb_url": "https://wandb.ai/...",
-  "adapter_path": "gs://bucket/path",
+  "adapter_path": "gs://bucket/trained_adapters/job123/ or gs://bucket/merged_models/job123/",
   "base_model_id": "google/gemma-2b",
+  "gguf_path": "gs://bucket/gguf_models/job123/model-q8_0.gguf",
+  "metrics": {
+    "accuracy": 0.95,
+    "perplexity": 1.23,
+    "eval_loss": 0.156,
+    "eval_runtime": 12.34
+  },
   "error": "Error message if failed"
+}
+```
+
+### GET `/jobs/{job_id}/download/gguf`
+
+Get pre-signed URL from GCS to download GGUF file.
+
+**Response:**
+
+```json
+{
+  "download_url": "https://storage.googleapis.com/bucket/gguf_models/job123/model-q8_0.gguf?..."
 }
 ```
 
 ### GET `/health`
 
 Health check endpoint.
+
+## Export Configuration
+
+The export configuration now supports:
+
+- **Primary Format**: Choose between `adapter` or `merged` model formats
+- **Optional GGUF**: Set `include_gguf: true` to also export a GGUF file alongside the primary model
+- **Separate Quantization**: Use `gguf_quantization` to specify different quantization for GGUF files
+
+### Example: Adapter with GGUF Export
+
+```json
+{
+  "export_config": {
+    "format": "adapter",
+    "quantization": "q4_k_m",
+    "destination": "gcs",
+    "include_gguf": true,
+    "gguf_quantization": "q8_0"
+  }
+}
+```
+
+This will export both:
+
+- Primary adapter model with q4_k_m quantization
+- GGUF file with q8_0 quantization
 
 ## Job Lifecycle
 

@@ -1,9 +1,8 @@
 import logging
-from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Optional, Dict, Any
 from google.cloud import firestore
-from dataclasses import dataclass
+from datetime import datetime, timezone
 
 
 class JobStatus(Enum):
@@ -16,39 +15,22 @@ class JobStatus(Enum):
     FAILED = "failed"
 
 
-@dataclass
-class JobMetadata:
-    """Job metadata structure"""
-
-    job_id: str
-    status: JobStatus
-    created_at: datetime
-    updated_at: datetime
-    processed_dataset_id: str
-    base_model_id: str
-    adapter_path: Optional[str] = None
-    wandb_url: Optional[str] = None
-    error: Optional[str] = None
-
-
 class JobStateManager:
     """
     Centralized job state management using Firestore using repository pattern.
     Provides clean API for tracking training job progress.
     """
 
-    def __init__(
-        self, db_client: firestore.Client, collection_name: str = "training_jobs"
-    ):
+    def __init__(self, project_id: str, collection_name: str = "training_jobs"):
         """
         Initialize job state manager.
 
         Args:
-            db_client: Firestore client instance
+            project_id: Google Cloud project ID
             collection_name: Name of the Firestore collection for jobs
         """
-        self.db = db_client
-        self.collection = db_client.collection(collection_name)
+        self.db = firestore.Client(project=project_id)
+        self.collection = self.db.collection(collection_name)
         self.logger = logging.getLogger(__name__)
 
     def mark_preparing(self, job_id: str) -> None:
@@ -71,16 +53,27 @@ class JobStateManager:
         self.logger.info(f"Marked job {job_id} as training")
 
     def mark_completed(
-        self, job_id: str, adapter_path: str, base_model_id: str
+        self,
+        job_id: str,
+        adapter_path: str,
+        base_model_id: str,
+        metrics: Optional[Dict[str, Any]] = None,
+        gguf_path: Optional[str] = None,
     ) -> None:
-        self.collection.document(job_id).update(
-            {
-                "status": JobStatus.COMPLETED.value,
-                "updated_at": datetime.now(timezone.utc),
-                "adapter_path": adapter_path,
-                "base_model_id": base_model_id,
-            }
-        )
+        """
+        Mark job as completed and optionally store evaluation metrics.
+        """
+        update_data = {
+            "status": JobStatus.COMPLETED.value,
+            "updated_at": datetime.now(timezone.utc),
+            "adapter_path": adapter_path,
+            "base_model_id": base_model_id,
+        }
+        if metrics is not None:
+            update_data["metrics"] = metrics
+        if gguf_path is not None:
+            update_data["gguf_path"] = gguf_path
+        self.collection.document(job_id).update(update_data)
         self.logger.info(f"Marked job {job_id} as completed")
 
     def mark_failed(self, job_id: str, error: str) -> None:
@@ -134,9 +127,17 @@ class JobTracker:
         """Mark job as training"""
         self.job_manager.mark_training(self.job_id, wandb_url)
 
-    def completed(self, adapter_path: str, base_model_id: str):
-        """Mark job as completed"""
-        self.job_manager.mark_completed(self.job_id, adapter_path, base_model_id)
+    def completed(
+        self,
+        adapter_path: str,
+        base_model_id: str,
+        metrics: Optional[Dict[str, Any]] = None,
+        gguf_path: Optional[str] = None,
+    ):
+        """Mark job as completed and record evaluation metrics"""
+        self.job_manager.mark_completed(
+            self.job_id, adapter_path, base_model_id, metrics, gguf_path
+        )
 
     def failed(self, error: str):
         """Mark job as failed"""

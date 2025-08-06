@@ -9,8 +9,10 @@ from schema import (
     InferenceResponse,
     BatchInferenceRequest,
     BatchInferenceResponse,
+    EvaluationRequest,
+    EvaluationResponse,
 )
-from inference_service import run_inference, run_batch_inference
+from base import run_inference, run_batch_inference, run_evaluation
 from typing import Optional
 
 app = FastAPI(
@@ -50,20 +52,17 @@ def login_hf(hf_token: Optional[str]):
 @app.post("/inference", response_model=InferenceResponse)
 async def inference(request: InferenceRequest):
     """Run inference using a trained adapter"""
-    prompt = request.prompt
-    job_id_or_repo_id = request.job_id_or_repo_id
-    if not prompt:
-        raise HTTPException(status_code=400, detail="prompt is required")
-    if not job_id_or_repo_id:
-        raise HTTPException(status_code=400, detail="job_id_or_repo_id is required")
     try:
         login_hf(request.hf_token)
         output = await run_in_threadpool(
-            run_inference, job_id_or_repo_id, prompt, request.storage_type
+            run_inference,
+            request.adapter_path,
+            request.base_model_id,
+            request.prompt,
         )
         return {"result": output}
     except FileNotFoundError:
-        logging.error(f"Adapter {job_id_or_repo_id} not found")
+        logging.error(f"Adapter {request.adapter_path} not found")
         raise HTTPException(status_code=404, detail="Adapter not found")
     except Exception as e:
         logging.error(f"Inference failed with error: {str(e)}", exc_info=True)
@@ -74,22 +73,54 @@ async def inference(request: InferenceRequest):
 async def batch_inference(request: BatchInferenceRequest):
     """Run batch inference using a trained adapter"""
     messages = request.messages
-    job_id_or_repo_id = request.job_id_or_repo_id
     if not messages or not isinstance(messages, list) or len(messages) == 0:
         raise HTTPException(status_code=400, detail="messages (list) is required")
-    if not job_id_or_repo_id:
-        raise HTTPException(status_code=400, detail="job_id_or_repo_id is required")
     try:
         login_hf(request.hf_token)
         outputs = await run_in_threadpool(
-            run_batch_inference, job_id_or_repo_id, messages, request.storage_type
+            run_batch_inference,
+            request.adapter_path,
+            request.base_model_id,
+            messages,
         )
         return {"results": outputs}
     except FileNotFoundError:
-        logging.error(f"Adapter {job_id_or_repo_id} not found")
+        logging.error(f"Adapter {request.adapter_path} not found")
         raise HTTPException(status_code=404, detail="Adapter not found")
     except Exception as e:
         logging.error(f"Batch inference failed with error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/evaluation", response_model=EvaluationResponse)
+async def evaluation(request: EvaluationRequest):
+    """Run evaluation of a fine-tuned model on a dataset"""
+    try:
+        login_hf(request.hf_token)
+        result = await run_in_threadpool(
+            run_evaluation,
+            request.adapter_path,
+            request.base_model_id,
+            request.dataset_id,
+            request.task_type,
+            request.metrics,
+            request.max_samples,
+            request.num_sample_results or 3,
+        )
+        return {
+            "metrics": result["metrics"],
+            "samples": result["samples"],
+            "num_samples": result["num_samples"],
+            "dataset_id": result["dataset_id"],
+        }
+    except FileNotFoundError as e:
+        logging.error(f"Resource not found: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        logging.error(f"Invalid request: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Evaluation failed with error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

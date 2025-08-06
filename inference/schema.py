@@ -1,13 +1,14 @@
 from pydantic import BaseModel
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Optional, Literal, Union
 
 
 class InferenceRequest(BaseModel):
-    # HF Token must be provided for Gemma models
-    hf_token: str
-    # The user should specify this so we don't have to look it up
-    storage_type: Literal["gcs", "hfhub"]
-    job_id_or_repo_id: str
+    hf_token: str  # HF Token must be provided for Gemma models
+    # Path to the adapter (can be local path, GCS path, or HF Hub repo ID)
+    adapter_path: str
+    # Base model ID to use for tokenizer and model class selection
+    base_model_id: str
+    # A single text message
     prompt: str
 
 
@@ -17,11 +18,70 @@ class InferenceResponse(BaseModel):
 
 class BatchInferenceRequest(BaseModel):
     hf_token: str
-    storage_type: Literal["gcs", "hfhub"]
-    job_id_or_repo_id: str
+    # Path to the adapter (can be local path, GCS path, or HF Hub repo ID)
+    adapter_path: str
+    # Base model ID to use for tokenizer and model class selection
+    base_model_id: str
     # A list of conversations, where each conversation is a list of messages
     messages: List[List[Dict[str, Any]]]
 
 
 class BatchInferenceResponse(BaseModel):
     results: list[str]
+
+
+TaskType = Literal[
+    "conversation", "qa", "summarization", "translation", "classification", "general"
+]
+
+MetricType = Literal[
+    "rouge",
+    "bertscore",
+    "accuracy",
+    "exact_match",
+    "bleu",
+    "meteor",
+    "recall",
+    "precision",
+    "f1",
+]
+
+
+class EvaluationRequest(BaseModel):
+    hf_token: str
+    # Path to the adapter (can be local path, GCS path, or HF Hub repo ID)
+    adapter_path: str
+    # Base model ID to use for tokenizer and model class selection
+    base_model_id: str
+    # Dataset ID to evaluate on (must have an eval split)
+    dataset_id: str
+    # Task type for predefined metric suite (mutually exclusive with metrics)
+    task_type: Optional[TaskType] = None
+    # Specific list of metrics to compute (mutually exclusive with task_type)
+    metrics: Optional[List[MetricType]] = None
+    # Maximum number of samples to evaluate (optional, for faster evaluation)
+    max_samples: Optional[int] = None
+    # Number of sample results to include in response (default: 3)
+    num_sample_results: Optional[int] = 3
+
+
+class SampleResult(BaseModel):
+    # Model's generated prediction
+    prediction: str
+    # Ground truth reference
+    reference: str
+    # Index of the sample in the evaluation dataset
+    sample_index: int
+    # Input messages/question (with images converted to base64 for API compatibility)
+    input: Optional[List[Dict[str, Any]]] = None
+
+
+class EvaluationResponse(BaseModel):
+    # Computed metrics results (can be simple floats or nested dicts for complex metrics like bertscore)
+    metrics: Dict[str, Union[float, Dict[str, float]]]
+    # Number of samples evaluated
+    num_samples: int
+    # Dataset ID that was evaluated
+    dataset_id: str
+    # Sample results for inspection
+    samples: List[SampleResult]

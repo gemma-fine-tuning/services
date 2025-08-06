@@ -1,4 +1,4 @@
-# Cloud Infrastructure for Gemma Fine-Tuning
+# Web Platform for Gemma 3 VLM Fine-Tuning
 
 > To be written and documented...
 
@@ -12,12 +12,20 @@ Jet Chiang & Adarsh Dubey -- Google Summer of Code 2025 @ Google DeepMind
 
 ## Features
 
-- Data preprocessing using huggingface and custom uploaded datasets
+- Data preprocessing (for vision and text) from custom uploaded and huggingface datasets
 - Data augmentation using NLP techniques and synthetic generation using LLM
 - Fine-tuning using both Huggingface or Unsloth frameworks (with 4/8 bit quantization)
-- Fine-tuning with PEFT (LoRA, QLoRA), RL (GRPO, PPO, to come soon), full SFT
-- Logging integration with Weights & Biases or TensorBoard
-- Evaluation, inference, and export of trained models
+- Fine-tuning with PEFT (LoRA, QLoRA), RL (GRPO, PPO, to come soon), full SFT for various tasks like classification, text generation, reasoning, etc.
+- Export to multiple formats (supports transformeres, vLLM, Ollama, llama.cpp, etc) to GCS bucket or huggingface hub
+- Cloud logging integration with Weights & Biases or TensorBoard
+- Task-specific evaluation suites and batch inference ("vibe check") of fine tuned models
+
+## Coming Soon
+
+- IaC and deployment scripts so you can run this on your own GCP project!
+- More data augmentation for vision and text datasets
+- Audio modality support for Gemma 3n
+- Direct deployment on GCP of fine tuned model using Ollama or vLLM
 
 ## Architecture
 
@@ -30,7 +38,7 @@ graph TD
     subgraph Backend
         B -- "Preprocess Request" --> C["Preprocessing Service"]
         C -- "Store Data" --> H["GCS"]
-        B -- "Inference Request" --> G["Inference Service"]
+        B -- "Inference, Eval, Export" --> G["Inference Service"]
         B -- "Train Request" --> D["Training Service"]
         D -- "Trigger Job (gRPC) & Write Config to GCS" --> E["Training Job"]
         E -- "Read Data, Export Model" --> H
@@ -49,4 +57,3 @@ graph TD
 - Read the `README.md` in each subdirectory for more details.
 - Deployment current uses `cloudbuild.yaml`, make sure you set the correct project ID with `gcloud config set project <project-id>`
 - Unless you have a CUDA GPU don't try to install all packages for certain services, it will fail locally (especially on Mac), use Colab for experiments instead
-- We are migrating to terraform soon

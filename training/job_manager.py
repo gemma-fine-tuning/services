@@ -4,6 +4,7 @@ from typing import Optional, Dict, Any
 from google.cloud import firestore
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from schema import EvaluationMetrics
 
 
 class JobStatus(Enum):
@@ -30,7 +31,9 @@ class JobMetadata:
     modality: Optional[str] = "text"
     adapter_path: Optional[str] = None
     wandb_url: Optional[str] = None
+    metrics: Optional[EvaluationMetrics] = None
     error: Optional[str] = None
+    gguf_path: Optional[str] = None
 
 
 class JobStateManager:
@@ -79,7 +82,9 @@ class JobStateManager:
                 modality=data.get("modality", "text"),
                 adapter_path=data.get("adapter_path"),
                 wandb_url=data.get("wandb_url"),
+                metrics=data.get("metrics"),
                 error=data.get("error"),
+                gguf_path=data.get("gguf_path"),
             )
         except Exception as e:
             self.logger.error(f"Failed to get job {job_id}: {e}")
@@ -99,7 +104,7 @@ class JobStateManager:
         if not job:
             return None
 
-        return {
+        status_dict = {
             "job_id": job.job_id,
             "job_name": job.job_name,
             "status": job.status.value,
@@ -110,8 +115,11 @@ class JobStateManager:
             "base_model_id": job.base_model_id,
             "adapter_path": job.adapter_path,
             "wandb_url": job.wandb_url,
+            "metrics": job.metrics,
             "error": job.error,
+            "gguf_path": job.gguf_path,
         }
+        return status_dict
 
     def ensure_job_document_exists(
         self, job_id: str, job_metadata: Optional[JobMetadata] = None
@@ -146,6 +154,7 @@ class JobStateManager:
                     "adapter_path": job_metadata.adapter_path,
                     "wandb_url": job_metadata.wandb_url,
                     "error": job_metadata.error,
+                    "gguf_path": job_metadata.gguf_path,
                 }
             )
 
@@ -162,6 +171,7 @@ class JobStateManager:
                     {
                         "job_id": data.get("job_id"),
                         "job_name": data.get("job_name"),
+                        "base_model_id": data.get("base_model_id"),
                         "status": data.get("status"),
                         "modality": data.get("modality", "text"),
                     }
