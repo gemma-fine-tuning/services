@@ -113,11 +113,33 @@ Get training job status.
 
 Get pre-signed URL from GCS to download GGUF file.
 
+> [!CAUTION]
+> This does not yet work because the service account has some issue with permissions (private key needed to sign bucket??). For now just download from the public URL public access is enabled on this bucket because all it has are files to download.
+
 **Response:**
 
 ```json
 {
   "download_url": "https://storage.googleapis.com/bucket/gguf_models/job123/model-q8_0.gguf?..."
+}
+```
+
+### DELETE `/jobs/{job_id}/delete`
+
+Delete a training job and all associated files (at firestore and GCS).
+
+**Response:**
+
+```json
+{
+  "job_id": "training_abc123_gemma-2b_def456",
+  "deleted": true,
+  "message": "Job and all associated files deleted successfully.",
+  "deleted_resources": [
+    "gs://bucket/trained_adapters/job123/",
+    "gs://bucket/merged_models/job123/",
+    "gs://bucket/gguf_models/job123/"
+  ]
 }
 ```
 

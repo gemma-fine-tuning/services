@@ -127,3 +127,10 @@ class JobListResponse(BaseModel):
 
 class DownloadUrlResponse(BaseModel):
     download_url: str
+
+
+class JobDeleteResponse(BaseModel):
+    job_id: str
+    deleted: bool
+    message: str
+    deleted_resources: Optional[List[str]] = None

@@ -180,3 +180,30 @@ class JobStateManager:
         except Exception as e:
             self.logger.error(f"Failed to list jobs: {e}")
             raise
+
+    def delete_job(self, job_id: str) -> bool:
+        """
+        Delete job metadata from Firestore.
+
+        Args:
+            job_id: Job identifier
+
+        Returns:
+            bool: True if job was deleted, False if job was not found
+
+        Raises:
+            Exception: If deletion fails for other reasons
+        """
+        try:
+            doc_ref = self.collection.document(job_id)
+            doc = doc_ref.get()
+            if not doc.exists:
+                self.logger.warning(f"Job {job_id} not found for deletion")
+                return False
+
+            doc_ref.delete()
+            self.logger.info(f"Successfully deleted job {job_id} from Firestore")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to delete job {job_id}: {e}")
+            raise

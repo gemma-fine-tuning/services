@@ -1,5 +1,6 @@
 import os
 import logging
+from typing import Optional, List
 from fastapi import FastAPI, HTTPException
 from google.cloud import run_v2
 from google.cloud import storage
@@ -11,6 +12,7 @@ from schema import (
     JobListResponse,
     JobListEntry,
     DownloadUrlResponse,
+    JobDeleteResponse,
 )
 import json
 import uvicorn
@@ -224,6 +226,124 @@ async def download_gguf_file(job_id: str):
 
 
 # NOTE: In the future we might want to add /jobs/{job_id}/download/model endpoint for adapter and merged models
+
+
+def delete_gcs_resources(
+    job_id: str, adapter_path: Optional[str], gguf_path: Optional[str]
+) -> List[str]:
+    """
+    Delete GCS resources associated with a job.
+
+    Args:
+        job_id: Job identifier
+        adapter_path: GCS path to adapter/merged model
+        gguf_path: GCS path to GGUF model
+
+    Returns:
+        List of deleted resource paths
+    """
+    deleted_resources = []
+    storage_client = storage.Client()
+
+    # Delete config file
+    try:
+        config_bucket = storage_client.bucket(GCS_CONFIG_BUCKET)
+        config_blob = config_bucket.blob(f"{job_id}.json")
+        if config_blob.exists():
+            config_blob.delete()
+            deleted_resources.append(f"gs://{GCS_CONFIG_BUCKET}/{job_id}.json")
+            logging.info(f"Deleted config file: gs://{GCS_CONFIG_BUCKET}/{job_id}.json")
+    except Exception as e:
+        logging.warning(f"Failed to delete config file for job {job_id}: {e}")
+
+    # Delete adapter/merged model
+    if adapter_path:
+        try:
+            if adapter_path.startswith("gs://"):
+                # Parse GCS path
+                path_parts = adapter_path.replace("gs://", "").split("/", 1)
+                if len(path_parts) == 2:
+                    bucket_name, blob_prefix = path_parts
+                    bucket = storage_client.bucket(bucket_name)
+
+                    # Delete all blobs with this prefix (handles directories)
+                    blobs = bucket.list_blobs(prefix=blob_prefix)
+                    deleted_count = 0
+                    for blob in blobs:
+                        blob.delete()
+                        deleted_count += 1
+
+                    if deleted_count > 0:
+                        deleted_resources.append(
+                            f"gs://{bucket_name}/{blob_prefix} ({deleted_count} files)"
+                        )
+                        logging.info(
+                            f"Deleted adapter resources: gs://{bucket_name}/{blob_prefix} ({deleted_count} files)"
+                        )
+        except Exception as e:
+            logging.warning(f"Failed to delete adapter resources for job {job_id}: {e}")
+
+    # Delete GGUF model
+    if gguf_path:
+        try:
+            if gguf_path.startswith("gs://"):
+                # Parse GCS path
+                path_parts = gguf_path.replace("gs://", "").split("/", 1)
+                if len(path_parts) == 2:
+                    bucket_name, blob_path = path_parts
+                    bucket = storage_client.bucket(bucket_name)
+                    blob = bucket.blob(blob_path)
+
+                    if blob.exists():
+                        blob.delete()
+                        deleted_resources.append(gguf_path)
+                        logging.info(f"Deleted GGUF file: {gguf_path}")
+        except Exception as e:
+            logging.warning(f"Failed to delete GGUF file for job {job_id}: {e}")
+
+    return deleted_resources
+
+
+@app.delete("/jobs/{job_id}/delete", response_model=JobDeleteResponse)
+async def delete_job(job_id: str):
+    """
+    Delete a job and all associated GCS resources.
+    This includes the job metadata, config file, adapter/merged model, and GGUF file if available.
+    """
+    try:
+        # First, get job data to find associated resources
+        job_data = job_manager.get_job_status_dict(job_id)
+        if not job_data:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        adapter_path = job_data.get("adapter_path")
+        gguf_path = job_data.get("gguf_path")
+
+        # Delete GCS resources
+        deleted_resources = delete_gcs_resources(job_id, adapter_path, gguf_path)
+
+        # Delete job metadata from Firestore
+        job_deleted = job_manager.delete_job(job_id)
+
+        if job_deleted:
+            message = f"Successfully deleted job {job_id} and associated resources"
+            logging.info(message)
+        else:
+            message = f"Job {job_id} metadata was not found, but cleaned up any existing resources"
+            logging.warning(message)
+
+        return JobDeleteResponse(
+            job_id=job_id,
+            deleted=True,
+            message=message,
+            deleted_resources=deleted_resources,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Failed to delete job {job_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete job: {str(e)}")
 
 
 @app.get("/jobs/{job_id}/status", response_model=JobStatusResponse)

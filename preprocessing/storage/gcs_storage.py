@@ -102,3 +102,27 @@ class GCSStorageManager(StorageInterface):
         except Exception as e:
             logger.error(f"Error deleting file: {str(e)}")
             raise
+
+    def delete_directory(self, prefix: str) -> int:
+        """
+        Delete all files with a given prefix (directory) from GCS
+
+        Args:
+            prefix: The prefix/directory to delete
+
+        Returns:
+            Number of files deleted
+        """
+        try:
+            blobs = self.bucket.list_blobs(prefix=prefix)
+            deleted_count = 0
+            for blob in blobs:
+                blob.delete()
+                deleted_count += 1
+                logger.info(f"Deleted: gs://{self.bucket_name}/{blob.name}")
+
+            logger.info(f"Deleted {deleted_count} files with prefix: {prefix}")
+            return deleted_count
+        except Exception as e:
+            logger.error(f"Error deleting directory with prefix {prefix}: {str(e)}")
+            raise
