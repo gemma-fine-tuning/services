@@ -44,3 +44,8 @@ class StorageInterface(ABC):
     def delete_file(self, path: str) -> bool:
         """Delete file from storage"""
         pass
+
+    @abstractmethod
+    def delete_directory(self, prefix: str) -> int:
+        """Delete all files with a given prefix (directory) from storage"""
+        pass

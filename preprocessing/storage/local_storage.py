@@ -125,3 +125,53 @@ class LocalStorageManager(StorageInterface):
         except Exception as e:
             logger.error(f"Error deleting file: {str(e)}")
             raise
+
+    def delete_directory(self, prefix: str) -> int:
+        """
+        Delete all files with a given prefix (directory) from local storage
+
+        Args:
+            prefix: The prefix/directory to delete
+
+        Returns:
+            Number of files deleted
+        """
+        try:
+            import shutil
+
+            deleted_count = 0
+            prefix_path = self.base_path / prefix
+
+            if prefix_path.exists() and prefix_path.is_dir():
+                # Delete entire directory
+                shutil.rmtree(prefix_path)
+                # Count files that were in the directory
+                for file_path in self.base_path.rglob("*"):
+                    if file_path.is_file() and str(
+                        file_path.relative_to(self.base_path)
+                    ).startswith(prefix):
+                        deleted_count += 1
+                logger.info(f"Deleted directory: {prefix_path}")
+            else:
+                # Delete files matching prefix
+                for file_path in self.base_path.rglob("*"):
+                    if file_path.is_file():
+                        relative_path = str(
+                            file_path.relative_to(self.base_path)
+                        ).replace("\\", "/")
+                        if relative_path.startswith(prefix):
+                            file_path.unlink()
+                            # Also delete metadata file if exists
+                            metadata_path = file_path.with_suffix(
+                                file_path.suffix + ".meta"
+                            )
+                            if metadata_path.exists():
+                                metadata_path.unlink()
+                            deleted_count += 1
+                            logger.info(f"Deleted: {relative_path}")
+
+            logger.info(f"Deleted {deleted_count} files with prefix: {prefix}")
+            return deleted_count
+        except Exception as e:
+            logger.error(f"Error deleting directory with prefix {prefix}: {str(e)}")
+            raise

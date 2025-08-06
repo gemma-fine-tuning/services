@@ -18,6 +18,10 @@ cd preprocessing
 gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
 ```
 
+- Cloud Run service (CPU only)
+- Environment: `GCS_DATA_BUCKET_NAME` required for GCS storage
+- Port: 8080 (default)
+
 ## Endpoints
 
 ### POST `/upload`
@@ -127,6 +131,26 @@ Get dataset information.
 
 > NOTE: Modality is returned when you fetch info for a dataset and it is determined by the service and saved to metadata during processing. It is not set by the user.
 
+### DELETE `/datasets/{dataset_name}/delete`
+
+Delete a dataset and all associated files.
+
+**Response:**
+
+```json
+{
+  "dataset_name": "your_dataset_name",
+  "deleted": true,
+  "message": "Dataset and all associated files deleted successfully.",
+  "deleted_files_count": 3,
+  "deleted_resources": [
+    "processed_datasets/your_dataset_name_processed/train.parquet",
+    "processed_datasets/your_dataset_name_processed/test.parquet",
+    "raw_datasets/your_dataset_name.csv"
+  ]
+}
+```
+
 ### GET `/health`
 
 Health check endpoint.
@@ -227,12 +251,6 @@ Vision processing is automatically enabled when image field mappings are detecte
 - Images are **always added to user messages only**
 - Images are processed in the order they appear in the field_mappings
 - Supported image formats: PIL Image objects, base64 strings, file paths, HuggingFace dataset format with `bytes` field
-
-## Deployment
-
-- Cloud Run service
-- Environment: `GCS_DATA_BUCKET_NAME` required for GCS storage
-- Port: 8080 (default)
 
 ## Environment Variables
 

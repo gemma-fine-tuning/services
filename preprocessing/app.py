@@ -10,6 +10,7 @@ from schema import (
     ProcessingResult,
     DatasetsInfoResponse,
     DatasetInfoResponse,
+    DatasetDeleteResponse,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -132,6 +133,48 @@ def get_dataset_info(dataset_name: str):
         logger.error(f"Error getting dataset info: {str(e)}")
         raise HTTPException(
             status_code=500, detail=f"Failed to get dataset info: {str(e)}"
+        )
+
+
+@app.delete("/datasets/{dataset_name}/delete", response_model=DatasetDeleteResponse)
+def delete_dataset(dataset_name: str):
+    """
+    Delete a dataset and all associated files.
+    NOTE: This only deletes preprocessed dataset, NOT raw dataset files!
+    """
+    try:
+        deleted_resources = []
+        total_deleted_files = 0
+
+        # Delete processed dataset (parquet files and metadata.json)
+        processed_prefix = f"processed_datasets/{dataset_name}"
+        processed_files = storage_manager.list_files(prefix=processed_prefix)
+        if processed_files:
+            deleted_count = storage_manager.delete_directory(processed_prefix)
+            total_deleted_files += deleted_count
+            deleted_resources.append(
+                f"Processed dataset: {processed_prefix} ({deleted_count} files)"
+            )
+
+        if total_deleted_files > 0:
+            message = f"Successfully deleted dataset '{dataset_name}' and all associated files"
+            logger.info(message)
+        else:
+            message = f"Dataset '{dataset_name}' not found or already deleted"
+            logger.warning(message)
+
+        return DatasetDeleteResponse(
+            dataset_name=dataset_name,
+            deleted=total_deleted_files > 0,
+            message=message,
+            deleted_files_count=total_deleted_files,
+            deleted_resources=deleted_resources,
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to delete dataset {dataset_name}: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete dataset: {str(e)}"
         )
 
 

@@ -104,3 +104,11 @@ class DatasetInfoFull(BaseModel):
 
 class DatasetInfoResponse(DatasetInfoFull):
     pass
+
+
+class DatasetDeleteResponse(BaseModel):
+    dataset_name: str
+    deleted: bool
+    message: str
+    deleted_files_count: int
+    deleted_resources: Optional[List[str]] = None
