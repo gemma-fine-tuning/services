@@ -23,3 +23,5 @@ dist/
 build/
 .venv/
 venv/
+.ruff_cache/
+test_*

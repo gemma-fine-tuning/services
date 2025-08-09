@@ -24,3 +24,5 @@ build/
 data/
 .venv/
 venv/
+.ruff_cache/
+test_*

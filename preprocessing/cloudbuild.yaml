@@ -31,6 +31,7 @@ steps:
         "--memory=8Gi",
         "--cpu=2",
         "--set-env-vars=STORAGE_TYPE=gcs,GCS_DATA_BUCKET_NAME=${_GCS_DATA_BUCKET_NAME}",
+        "--set-env-vars=PROJECT_ID=$PROJECT_ID",
       ]
 
 substitutions:
