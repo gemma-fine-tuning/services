@@ -34,6 +34,7 @@ class JobMetadata:
     metrics: Optional[EvaluationMetrics] = None
     error: Optional[str] = None
     gguf_path: Optional[str] = None
+    user_id: Optional[str] = None
 
 
 class JobStateManager:
@@ -73,18 +74,19 @@ class JobStateManager:
                 return None
             return JobMetadata(
                 job_id=data["job_id"],
-                job_name=data["job_name"],
                 status=JobStatus(data["status"]),
                 created_at=data["created_at"],
                 updated_at=data["updated_at"],
                 processed_dataset_id=data["processed_dataset_id"],
                 base_model_id=data["base_model_id"],
+                job_name=data["job_name"],
                 modality=data.get("modality", "text"),
                 adapter_path=data.get("adapter_path"),
                 wandb_url=data.get("wandb_url"),
                 metrics=data.get("metrics"),
                 error=data.get("error"),
                 gguf_path=data.get("gguf_path"),
+                user_id=data.get("user_id"),
             )
         except Exception as e:
             self.logger.error(f"Failed to get job {job_id}: {e}")
@@ -155,6 +157,7 @@ class JobStateManager:
                     "wandb_url": job_metadata.wandb_url,
                     "error": job_metadata.error,
                     "gguf_path": job_metadata.gguf_path,
+                    "user_id": job_metadata.user_id,
                 }
             )
 
@@ -207,3 +210,47 @@ class JobStateManager:
         except Exception as e:
             self.logger.error(f"Failed to delete job {job_id}: {e}")
             raise
+
+    def verify_processed_dataset_ownership(self, dataset_id: str, user_id: str) -> bool:
+        """
+        Verify that a processed dataset is owned by the specified user.
+
+        Args:
+            dataset_id: The processed dataset ID to check
+            user_id: The user ID to verify ownership against
+
+        Returns:
+            bool: True if the user owns the dataset, False otherwise
+        """
+        try:
+            doc = self.db.collection("processed_datasets").document(dataset_id).get()
+            if not doc.exists:
+                return False
+            data = doc.to_dict()
+            return data and data.get("user_id") == user_id
+        except Exception as e:
+            self.logger.error(
+                f"Failed to verify processed dataset ownership for {dataset_id}: {e}"
+            )
+            return False
+
+    def verify_job_ownership(self, job_id: str, user_id: str) -> bool:
+        """
+        Verify that a training job is owned by the specified user.
+
+        Args:
+            job_id: The job ID to check
+            user_id: The user ID to verify ownership against
+
+        Returns:
+            bool: True if the user owns the job, False otherwise
+        """
+        try:
+            doc = self.collection.document(job_id).get()
+            if not doc.exists:
+                return False
+            data = doc.to_dict()
+            return data and data.get("user_id") == user_id
+        except Exception as e:
+            self.logger.error(f"Failed to verify job ownership for {job_id}: {e}")
+            return False
