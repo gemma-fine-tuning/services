@@ -74,7 +74,7 @@ List all datasets.
 ["dataset1", "dataset2"]
 ```
 
-### GET `/datasets/{dataset_name}`
+### GET `/datasets/{processed_dataset_id}`
 
 Get dataset information.
 
@@ -83,6 +83,7 @@ Get dataset information.
 ```json
 {
   "dataset_name": "your_dataset_name",
+  "processed_dataset_id": "uuid",
   "num_rows": 1234,
   "columns": ["col1", "col2", ...],
   "info": {
@@ -131,7 +132,7 @@ Get dataset information.
 
 > NOTE: Modality is returned when you fetch info for a dataset and it is determined by the service and saved to metadata during processing. It is not set by the user.
 
-### DELETE `/datasets/{dataset_name}/delete`
+### DELETE `/datasets/{processed_dataset_id}/delete`
 
 Delete a dataset and all associated files.
 

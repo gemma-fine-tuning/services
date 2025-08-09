@@ -22,6 +22,7 @@ class RawDatasetMetadata:
 class ProcessedDatasetMetadata:
     """Metadata for processed datasets"""
 
+    processed_dataset_id: str
     dataset_name: str
     user_id: str
     source_dataset_id: str
@@ -75,14 +76,15 @@ class DatasetTracker:
 
     def track_processed_dataset(self, metadata: ProcessedDatasetMetadata) -> None:
         """
-        Track a processed dataset.
+        Track a processed dataset using its unique processed_dataset_id.
 
         Args:
             metadata: Processed dataset metadata
         """
         try:
-            self.processed_collection.document(metadata.dataset_name).set(
+            self.processed_collection.document(metadata.processed_dataset_id).set(
                 {
+                    "processed_dataset_id": metadata.processed_dataset_id,
                     "dataset_name": metadata.dataset_name,
                     "user_id": metadata.user_id,
                     "source_dataset_id": metadata.source_dataset_id,
@@ -92,10 +94,12 @@ class DatasetTracker:
                     "splits": metadata.splits,
                 }
             )
-            self.logger.info(f"Tracked processed dataset: {metadata.dataset_name}")
+            self.logger.info(
+                f"Tracked processed dataset: {metadata.processed_dataset_id}"
+            )
         except Exception as e:
             self.logger.error(
-                f"Failed to track processed dataset {metadata.dataset_name}: {e}"
+                f"Failed to track processed dataset {metadata.processed_dataset_id}: {e}"
             )
             raise
 
@@ -122,38 +126,38 @@ class DatasetTracker:
             return False
 
     def verify_processed_dataset_ownership(
-        self, dataset_name: str, user_id: str
+        self, processed_dataset_id: str, user_id: str
     ) -> bool:
         """
         Verify that a user owns a processed dataset.
 
         Args:
-            dataset_name: Processed dataset name
+            processed_dataset_id: Processed dataset unique ID
             user_id: User ID
 
         Returns:
             True if user owns the dataset, False otherwise
         """
         try:
-            doc = self.processed_collection.document(dataset_name).get()
+            doc = self.processed_collection.document(processed_dataset_id).get()
             if not doc.exists:
                 return False
             return doc.to_dict().get("user_id") == user_id
         except Exception as e:
             self.logger.error(
-                f"Failed to verify processed dataset ownership {dataset_name}: {e}"
+                f"Failed to verify processed dataset ownership {processed_dataset_id}: {e}"
             )
             return False
 
     def get_user_processed_datasets(self, user_id: str) -> List[str]:
         """
-        Get all processed dataset names owned by a user.
+        Get all processed dataset IDs owned by a user.
 
         Args:
             user_id: User ID
 
         Returns:
-            List of dataset names
+            List of processed dataset IDs
         """
         try:
             docs = self.processed_collection.where("user_id", "==", user_id).stream()
@@ -162,27 +166,29 @@ class DatasetTracker:
             self.logger.error(f"Failed to get user processed datasets: {e}")
             return []
 
-    def delete_processed_dataset_metadata(self, dataset_name: str) -> bool:
+    def delete_processed_dataset_metadata(self, processed_dataset_id: str) -> bool:
         """
         Delete processed dataset metadata.
 
         Args:
-            dataset_name: Processed dataset name
+            processed_dataset_id: Processed dataset unique ID
 
         Returns:
             True if deleted, False if not found
         """
         try:
-            doc_ref = self.processed_collection.document(dataset_name)
+            doc_ref = self.processed_collection.document(processed_dataset_id)
             doc = doc_ref.get()
             if doc.exists:
                 doc_ref.delete()
-                self.logger.info(f"Deleted processed dataset metadata: {dataset_name}")
+                self.logger.info(
+                    f"Deleted processed dataset metadata: {processed_dataset_id}"
+                )
                 return True
             return False
         except Exception as e:
             self.logger.error(
-                f"Failed to delete processed dataset metadata {dataset_name}: {e}"
+                f"Failed to delete processed dataset metadata {processed_dataset_id}: {e}"
             )
             raise
 

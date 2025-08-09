@@ -67,7 +67,7 @@ def make_job_id(
     This also makes tracking in firestore consistent.
 
     Args:
-        processed_dataset_id (str): dataset_name, this might contain spaces we need to replace them first
+        processed_dataset_id (str): processed_dataset_id, this might contain spaces we need to replace them first
         base_model_id (str): The ID of the base model
         request (TrainRequest): The request object
 

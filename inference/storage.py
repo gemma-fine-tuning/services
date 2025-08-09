@@ -181,7 +181,7 @@ class CloudStorageService:
         new preprocessing service format.
 
         Args:
-            processed_dataset_id (str): Identifier for the processed dataset (dataset_name from preprocessing)
+            processed_dataset_id (str): Identifier for the processed dataset (processed_dataset_id from preprocessing)
 
         Returns:
             Tuple[Dataset, Optional[Dataset]]: Train and eval datasets

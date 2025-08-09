@@ -183,10 +183,8 @@ class DatasetService:
             ... )
         """
         try:
-            if self.handler.does_dataset_exist(dataset_name):
-                raise ValueError(
-                    f"Dataset {dataset_name} already exists. Please use a different name."
-                )
+            # Check if dataset name is already taken (we'll remove this check since we use unique IDs now)
+            # We can keep similar names as they will have different unique IDs
 
             # Load dataset with splits
             dataset = self.loader.load_dataset(
@@ -210,8 +208,8 @@ class DatasetService:
                     processed_dataset, augmentation_config
                 )
 
-            # Save all splits
-            self.handler.upload_processed_dataset(
+            # Save all splits and get the unique processed dataset ID
+            dataset_path, processed_dataset_id = self.handler.upload_processed_dataset(
                 processed_dataset,
                 dataset_name,
                 dataset_id,
@@ -224,7 +222,8 @@ class DatasetService:
                 dataset_name=dataset_name,
                 dataset_subset=dataset_subset,
                 dataset_source=dataset_source,
-                dataset_id=dataset_id,
+                dataset_id=dataset_id,  # Keep original source dataset ID
+                processed_dataset_id=processed_dataset_id,  # Add unique processed dataset ID
                 num_examples=len(processed_dataset["train"]),
                 created_at=datetime.now().isoformat(),
                 splits=list(processed_dataset.keys()),
@@ -253,23 +252,25 @@ class DatasetService:
         try:
             all_files = self.storage.list_files(prefix="processed_datasets/")
 
-            dataset_names = set()
+            processed_dataset_ids = set()
 
             for file_path in all_files:
                 if file_path.startswith("processed_datasets/"):
                     parts = file_path.split("/")
                     if len(parts) >= 3:
-                        dataset_names.add(parts[1])
+                        processed_dataset_ids.add(parts[1])
 
             datasets_info = []
 
-            for dataset_name in dataset_names:
+            for processed_dataset_id in processed_dataset_ids:
                 try:
-                    metadata_path = f"processed_datasets/{dataset_name}/metadata.json"
+                    metadata_path = (
+                        f"processed_datasets/{processed_dataset_id}/metadata.json"
+                    )
 
                     if not self.storage.file_exists(metadata_path):
                         logger.warning(
-                            f"Metadata file not found for dataset: {dataset_name}"
+                            f"Metadata file not found for dataset: {processed_dataset_id}"
                         )
                         continue
 
@@ -285,6 +286,7 @@ class DatasetService:
                         dataset_subset=metadata.get("dataset_subset"),
                         dataset_source=metadata.get("dataset_source"),
                         dataset_id=metadata.get("dataset_id"),
+                        processed_dataset_id=processed_dataset_id,
                         num_examples=total_examples,
                         created_at=metadata.get("upload_date"),
                         splits=[
@@ -298,7 +300,7 @@ class DatasetService:
 
                 except Exception as e:
                     logger.error(
-                        f"Error reading metadata for dataset {dataset_name}: {str(e)}"
+                        f"Error reading metadata for dataset {processed_dataset_id}: {str(e)}"
                     )
                     continue
 
@@ -308,13 +310,16 @@ class DatasetService:
             logger.error(f"Error getting datasets info: {str(e)}")
             raise
 
-    def get_dataset_info(self, dataset_name: str) -> DatasetInfoResponse:
+    def get_dataset_info(self, processed_dataset_id: str) -> DatasetInfoResponse:
         """
         Get information about a dataset including samples from each split.
         For vision datasets, PIL Images (bytes) are automatically converted to base64 data URLs for API compatibility.
+
+        Args:
+            processed_dataset_id: Unique identifier for the processed dataset
         """
         try:
-            metadata_path = f"processed_datasets/{dataset_name}/metadata.json"
+            metadata_path = f"processed_datasets/{processed_dataset_id}/metadata.json"
             metadata_content = self.storage.download_data(metadata_path)
             metadata = json.loads(metadata_content)
 
@@ -322,7 +327,9 @@ class DatasetService:
             splits_with_samples = []
             for split_info in metadata.get("splits", []):
                 split_name = split_info.get("split_name")
-                split_path = f"processed_datasets/{dataset_name}/{split_name}.parquet"
+                split_path = (
+                    f"processed_datasets/{processed_dataset_id}/{split_name}.parquet"
+                )
 
                 # Get samples from the split
                 samples = []
@@ -359,7 +366,10 @@ class DatasetService:
                 dataset_name=metadata.get("dataset_name"),
                 dataset_subset=metadata.get("dataset_subset"),
                 dataset_source=metadata.get("dataset_source"),
-                dataset_id=metadata.get("dataset_id"),
+                dataset_id=metadata.get("dataset_id"),  # Original source dataset ID
+                processed_dataset_id=metadata.get(
+                    "processed_dataset_id"
+                ),  # Unique processed dataset ID
                 created_at=metadata.get("upload_date"),
                 splits=splits_with_samples,
                 modality=metadata.get("modality", "text"),

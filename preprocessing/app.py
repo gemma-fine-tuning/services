@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -137,6 +138,7 @@ def process_dataset(
 
         # Create metadata entry for the processed dataset
         processed_metadata = ProcessedDatasetMetadata(
+            processed_dataset_id=result.processed_dataset_id,
             dataset_name=request.dataset_name,
             user_id=current_user_id,
             source_dataset_id=request.dataset_id,
@@ -163,11 +165,13 @@ def get_datasets_info(
     """
     try:
         # Filter by ownership using processed_datasets collection
-        allowed = dataset_tracker.get_user_processed_datasets(current_user_id)
+        allowed_ids = dataset_tracker.get_user_processed_datasets(current_user_id)
 
-        # Get all datasets info and filter by ownership
+        # Get all datasets info and filter by ownership using processed_dataset_id
         all_info = dataset_service.get_datasets_info()
-        filtered = [ds for ds in all_info.datasets if ds.dataset_name in allowed]
+        filtered = [
+            ds for ds in all_info.datasets if ds.processed_dataset_id in allowed_ids
+        ]
         return DatasetsInfoResponse(datasets=filtered)
     except Exception as e:
         logger.error(f"Error getting datasets info: {str(e)}")
@@ -176,21 +180,21 @@ def get_datasets_info(
         )
 
 
-@app.get("/datasets/{dataset_name}", response_model=DatasetInfoResponse)
+@app.get("/datasets/{processed_dataset_id}", response_model=DatasetInfoResponse)
 def get_dataset_info(
-    dataset_name: str,
+    processed_dataset_id: str,
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
-    Get information about a dataset.
+    Get information about a dataset using its unique processed dataset ID.
     """
     try:
         # verify ownership of processed dataset
         if not dataset_tracker.verify_processed_dataset_ownership(
-            dataset_name, current_user_id
+            processed_dataset_id, current_user_id
         ):
             raise HTTPException(status_code=404, detail="Dataset not found")
-        return dataset_service.get_dataset_info(dataset_name)
+        return dataset_service.get_dataset_info(processed_dataset_id)
     except Exception as e:
         logger.error(f"Error getting dataset info: {str(e)}")
         raise HTTPException(
@@ -198,13 +202,15 @@ def get_dataset_info(
         )
 
 
-@app.delete("/datasets/{dataset_name}/delete", response_model=DatasetDeleteResponse)
+@app.delete(
+    "/datasets/{processed_dataset_id}/delete", response_model=DatasetDeleteResponse
+)
 def delete_dataset(
-    dataset_name: str,
+    processed_dataset_id: str,
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
-    Delete a dataset and all associated files.
+    Delete a dataset and all associated files using its unique processed dataset ID.
     NOTE: This only deletes preprocessed dataset, NOT raw dataset files!
     """
     try:
@@ -213,13 +219,25 @@ def delete_dataset(
 
         # verify ownership of processed dataset
         if not dataset_tracker.verify_processed_dataset_ownership(
-            dataset_name, current_user_id
+            processed_dataset_id, current_user_id
         ):
             raise HTTPException(
                 status_code=404, detail="Dataset not found or not owned by user"
             )
+
+        # Get dataset name from metadata for response
+        try:
+            metadata_path = f"processed_datasets/{processed_dataset_id}/metadata.json"
+            metadata_content = storage_manager.download_data(metadata_path)
+            metadata = json.loads(metadata_content)
+            dataset_name = metadata.get("dataset_name", processed_dataset_id)
+        except Exception:
+            dataset_name = (
+                processed_dataset_id  # fallback to ID if metadata unavailable
+            )
+
         # Delete processed dataset (parquet files and metadata.json)
-        processed_prefix = f"processed_datasets/{dataset_name}"
+        processed_prefix = f"processed_datasets/{processed_dataset_id}"
         processed_files = storage_manager.list_files(prefix=processed_prefix)
         if processed_files:
             deleted_count = storage_manager.delete_directory(processed_prefix)
@@ -237,7 +255,7 @@ def delete_dataset(
 
         # remove metadata for processed dataset
         if total_deleted_files > 0:
-            dataset_tracker.delete_processed_dataset_metadata(dataset_name)
+            dataset_tracker.delete_processed_dataset_metadata(processed_dataset_id)
         return DatasetDeleteResponse(
             dataset_name=dataset_name,
             deleted=total_deleted_files > 0,
