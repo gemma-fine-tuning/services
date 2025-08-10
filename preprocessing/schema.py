@@ -85,7 +85,7 @@ class DatasetInfoSample(BaseModel):
 
 
 class ProcessingResult(DatasetInfoSample):
-    pass
+    full_splits: List[Dict[str, Any]] = []
 
 
 class DatasetsInfoResponse(BaseModel):

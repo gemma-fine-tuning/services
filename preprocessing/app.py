@@ -1,11 +1,10 @@
 import os
-import json
 import logging
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from storage import GCSStorageManager, LocalStorageManager
 from services.dataset_service import DatasetService
-from dataset_tracker import DatasetTracker, RawDatasetMetadata, ProcessedDatasetMetadata
+from dataset_tracker import DatasetTracker
 from auth import initialize_firebase, get_current_user_id
 from schema import (
     DatasetUploadResponse,
@@ -79,15 +78,15 @@ async def upload_dataset(
             metadata={"content_type": file.content_type, "user_id": current_user_id},
         )
         # Track raw dataset metadata
-        raw_metadata = RawDatasetMetadata(
-            dataset_id=result.dataset_id,
-            gcs_path=result.gcs_path,
-            user_id=current_user_id,
-            filename=result.filename,
-            content_type=file.content_type or "unknown",
-            size_bytes=result.size_bytes,
-            created_at=result.created_at,
-        )
+        raw_metadata = {
+            "dataset_id": result.dataset_id,
+            "gcs_path": result.gcs_path,
+            "user_id": current_user_id,
+            "filename": result.filename,
+            "content_type": file.content_type or "unknown",
+            "size_bytes": result.size_bytes,
+            "created_at": result.created_at,
+        }
         dataset_tracker.track_raw_dataset(raw_metadata)
 
         return result
@@ -136,17 +135,21 @@ def process_dataset(
             config=request.config,
         )
 
-        # Create metadata entry for the processed dataset
-        processed_metadata = ProcessedDatasetMetadata(
-            processed_dataset_id=result.processed_dataset_id,
-            dataset_name=request.dataset_name,
-            user_id=current_user_id,
-            source_dataset_id=request.dataset_id,
-            dataset_source=request.dataset_source,
-            created_at=result.created_at,
-            num_examples=result.num_examples,
-            splits=result.splits,
-        )
+        # Use the complete metadata from the result for Firestore storage
+        # Note: result.full_metadata contains the complete splits info as List[Dict]
+        processed_metadata = {
+            "processed_dataset_id": result.processed_dataset_id,
+            "dataset_name": request.dataset_name,
+            "user_id": current_user_id,
+            "dataset_id": request.dataset_id,
+            "dataset_source": request.dataset_source,
+            "dataset_subset": request.dataset_subset,
+            "created_at": result.created_at,
+            "num_examples": result.num_examples,
+            "splits": result.full_splits,
+            "modality": result.modality,
+            "config": request.config,
+        }
         dataset_tracker.track_processed_dataset(processed_metadata)
 
         return result
@@ -161,18 +164,10 @@ def get_datasets_info(
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
-    Get information about all the processed datasets.
+    Get information about all the processed datasets owned by the user.
     """
     try:
-        # Filter by ownership using processed_datasets collection
-        allowed_ids = dataset_tracker.get_user_processed_datasets(current_user_id)
-
-        # Get all datasets info and filter by ownership using processed_dataset_id
-        all_info = dataset_service.get_datasets_info()
-        filtered = [
-            ds for ds in all_info.datasets if ds.processed_dataset_id in allowed_ids
-        ]
-        return DatasetsInfoResponse(datasets=filtered)
+        return dataset_service.get_datasets_info(current_user_id, dataset_tracker)
     except Exception as e:
         logger.error(f"Error getting datasets info: {str(e)}")
         raise HTTPException(
@@ -194,7 +189,7 @@ def get_dataset_info(
             processed_dataset_id, current_user_id
         ):
             raise HTTPException(status_code=404, detail="Dataset not found")
-        return dataset_service.get_dataset_info(processed_dataset_id)
+        return dataset_service.get_dataset_info(processed_dataset_id, dataset_tracker)
     except Exception as e:
         logger.error(f"Error getting dataset info: {str(e)}")
         raise HTTPException(
@@ -225,18 +220,22 @@ def delete_dataset(
                 status_code=404, detail="Dataset not found or not owned by user"
             )
 
-        # Get dataset name from metadata for response
+        # Get dataset name from Firestore metadata for response
         try:
-            metadata_path = f"processed_datasets/{processed_dataset_id}/metadata.json"
-            metadata_content = storage_manager.download_data(metadata_path)
-            metadata = json.loads(metadata_content)
-            dataset_name = metadata.get("dataset_name", processed_dataset_id)
+            processed_metadata = dataset_tracker.get_processed_dataset_metadata(
+                processed_dataset_id
+            )
+            dataset_name = (
+                processed_metadata["dataset_name"]
+                if processed_metadata
+                else processed_dataset_id
+            )
         except Exception:
             dataset_name = (
                 processed_dataset_id  # fallback to ID if metadata unavailable
             )
 
-        # Delete processed dataset (parquet files and metadata.json)
+        # Delete processed dataset (parquet files only, metadata is in Firestore)
         processed_prefix = f"processed_datasets/{processed_dataset_id}"
         processed_files = storage_manager.list_files(prefix=processed_prefix)
         if processed_files:

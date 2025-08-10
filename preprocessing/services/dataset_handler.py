@@ -1,5 +1,4 @@
 import uuid
-import json
 from datetime import datetime
 import logging
 from typing import Optional, Dict
@@ -181,7 +180,7 @@ class DatasetHandler:
         dataset_subset: str,
         config: PreprocessingConfig,
         dataset_source: str,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, dict]:
         """
         Upload a processed dataset to storage with a unique identifier.
 
@@ -194,9 +193,10 @@ class DatasetHandler:
             dataset_source (str): Source of the dataset ("upload" or "huggingface")
 
         Returns:
-            tuple[str, str]: A tuple containing (dataset_path, processed_dataset_id)
+            tuple[str, str, dict]: A tuple containing (dataset_path, processed_dataset_id, metadata)
                 - dataset_path: Storage path for the processed dataset
                 - processed_dataset_id: Unique identifier for the processed dataset
+                - metadata: Dict containing dataset metadata for Firestore
 
         Raises:
             ValueError: If the dataset is empty, if the dataset is not in the correct format,
@@ -254,13 +254,10 @@ class DatasetHandler:
         if not metadata["splits"]:
             raise ValueError("Cannot upload dataset: all splits are empty")
 
-        metadata_path = self.storage.upload_data(
-            json.dumps(metadata), f"{base_blob_name}/metadata.json"
-        )
+        # Return metadata for Firestore instead of creating metadata.json
+        dataset_path = f"processed_datasets/{processed_dataset_id}/"
 
-        dataset_path = metadata_path.replace("metadata.json", "")
-
-        return dataset_path, processed_dataset_id
+        return dataset_path, processed_dataset_id, metadata
 
     def does_dataset_exist(self, processed_dataset_id: str) -> bool:
         """

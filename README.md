@@ -1,10 +1,8 @@
 # Web Platform for Gemma 3 VLM Fine-Tuning
 
-> To be written and documented...
+This project sets up cloud infrastructure on Google Cloud Platform (GCP) for managing and running fine tuning jobs on Gemma models. We use Cloud Run, Cloud Storage, Firestore, Firebase, API Gateway, and various LLM fine tuning and inference frameworks for a scalable, customizable, and efficient system. Besides accessing our service through our web platform, you can easily deploy this on your own GCP project, or use it as reference for building similar systems.
 
-This project sets up cloud infra for runing fine tuning jobs on Gemma models using the Hugging Face ecosystem. We leverage GCP technologies such as Cloud Run, Cloud Storage, Firestore for a scalable and efficient system.
-
-Jet Chiang & Adarsh Dubey -- Google Summer of Code 2025 @ Google DeepMind
+Jet Chiang (@supreme-gg-gg) & Adarsh Dubey (@inclinedadarsh) -- Google Summer of Code 2025 @ Google DeepMind
 
 ## Features
 
@@ -21,32 +19,52 @@ Jet Chiang & Adarsh Dubey -- Google Summer of Code 2025 @ Google DeepMind
 - IaC and deployment scripts so you can run this on your own GCP project!
 - More data augmentation for vision and text datasets
 - Audio modality support for Gemma 3n
-- Direct deployment on GCP of fine tuned model using Ollama or vLLM
+- Direct deployment on GCP of fine tuned model using Ollama or vLLM (one-click and ready for inference)
 
 ## Architecture
 
 ```mermaid
 graph TD
-    subgraph Frontend
-        A["User"] --> B["Frontend"]
+subgraph Frontend
+B["User"]
+end
+
+    subgraph Authentication
+        B -- "API Request (JWT)" --> X["API Gateway"]
     end
 
     subgraph Backend
-        B -- "Preprocess Request" --> C["Preprocessing Service"]
+        X -- "Preprocess Request" --> C["Preprocessing Service"]
+        C -- "Track Dataset" --> F1["Firestore (Datasets)"]
         C -- "Store Data" --> H["GCS"]
-        B -- "Inference, Eval, Export" --> G["Inference Service"]
-        B -- "Train Request" --> D["Training Service"]
+        X -- "Inference, Eval, Export" --> G["Inference Service"]
+        X -- "Train Request" --> D["Training Service"]
         D -- "Trigger Job (gRPC) & Write Config to GCS" --> E["Training Job"]
         E -- "Read Data, Export Model" --> H
-        E -- "Update Status" --> F["Firestore"]
-        F -- "Read status" --> D
+        E -- "Update Status" --> F2["Firestore (Jobs)"]
+        F2 -- "Read status" --> D
         G -- "Load Model" --> H
     end
 
-    class C,D,G service;
-    class E job;
-    class F,H storage;
+    classDef cpu fill:#e0f7fa,stroke:#333,stroke-width:1px;
+    classDef gpu fill:#fff3e0,stroke:#333,stroke-width:1px;
+    classDef storage fill:#f3e5f5,stroke:#333,stroke-width:1px;
+    classDef gateway fill:#ffe082,stroke:#333,stroke-width:1px;
+
+    class C,D cpu;
+    class G,E gpu;
+    class F1,F2,H storage;
+    class X gateway;
 ```
+
+## Security & Authentication
+
+- All API requests are authenticated via Firebase Auth (JWT) at the API Gateway layer.
+- API Gateway validates the token and injects the user’s UID as an `X-User-ID` header to all backend services.
+- All Cloud Run services are private and only accessible via the API Gateway.
+- Each backend service trusts the `X-User-ID` header and enforces per-user data scoping (datasets, jobs, etc).
+- No backend service performs token verification directly (unless running in local/dev mode).
+- Firestore documents for datasets and jobs include a `user_id` field for multi-tenant isolation.
 
 ## Developers Notes
 

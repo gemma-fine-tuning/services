@@ -1,41 +1,13 @@
 import logging
-from typing import List
+from typing import List, Optional
 from google.cloud import firestore
-from dataclasses import dataclass
-from datetime import datetime
-
-
-@dataclass
-class RawDatasetMetadata:
-    """Metadata for uploaded raw datasets"""
-
-    dataset_id: str
-    gcs_path: str
-    user_id: str
-    filename: str
-    content_type: str
-    size_bytes: int
-    created_at: datetime
-
-
-@dataclass
-class ProcessedDatasetMetadata:
-    """Metadata for processed datasets"""
-
-    processed_dataset_id: str
-    dataset_name: str
-    user_id: str
-    source_dataset_id: str
-    dataset_source: str
-    created_at: str
-    num_examples: int
-    splits: List[str]
 
 
 class DatasetTracker:
     """
     Centralized dataset metadata management using Firestore.
     Tracks both raw uploads and processed datasets with user ownership.
+    Uses simple dictionaries instead of complex dataclasses.
     """
 
     def __init__(self, project_id: str):
@@ -50,56 +22,36 @@ class DatasetTracker:
         self.processed_collection = self.db.collection("processed_datasets")
         self.logger = logging.getLogger(__name__)
 
-    def track_raw_dataset(self, metadata: RawDatasetMetadata) -> None:
+    def track_raw_dataset(self, metadata: dict) -> None:
         """
         Track a raw uploaded dataset.
 
         Args:
-            metadata: Raw dataset metadata
+            metadata: Dict with keys: dataset_id, gcs_path, user_id, filename, content_type, size_bytes, created_at
         """
         try:
-            self.raw_collection.document(metadata.dataset_id).set(
-                {
-                    "dataset_id": metadata.dataset_id,
-                    "gcs_path": metadata.gcs_path,
-                    "user_id": metadata.user_id,
-                    "filename": metadata.filename,
-                    "content_type": metadata.content_type,
-                    "size_bytes": metadata.size_bytes,
-                    "created_at": metadata.created_at,
-                }
-            )
-            self.logger.info(f"Tracked raw dataset: {metadata.dataset_id}")
+            self.raw_collection.document(metadata["dataset_id"]).set(metadata)
+            self.logger.info(f"Tracked raw dataset: {metadata['dataset_id']}")
         except Exception as e:
-            self.logger.error(f"Failed to track raw dataset {metadata.dataset_id}: {e}")
+            self.logger.error(
+                f"Failed to track raw dataset {metadata.get('dataset_id', 'unknown')}: {e}"
+            )
             raise
 
-    def track_processed_dataset(self, metadata: ProcessedDatasetMetadata) -> None:
+    def track_processed_dataset(self, metadata: dict) -> None:
         """
         Track a processed dataset using its unique processed_dataset_id.
 
         Args:
-            metadata: Processed dataset metadata
+            metadata: Dict with all the processed dataset fields
         """
         try:
-            self.processed_collection.document(metadata.processed_dataset_id).set(
-                {
-                    "processed_dataset_id": metadata.processed_dataset_id,
-                    "dataset_name": metadata.dataset_name,
-                    "user_id": metadata.user_id,
-                    "source_dataset_id": metadata.source_dataset_id,
-                    "dataset_source": metadata.dataset_source,
-                    "created_at": metadata.created_at,
-                    "num_examples": metadata.num_examples,
-                    "splits": metadata.splits,
-                }
-            )
-            self.logger.info(
-                f"Tracked processed dataset: {metadata.processed_dataset_id}"
-            )
+            processed_dataset_id = metadata["processed_dataset_id"]
+            self.processed_collection.document(processed_dataset_id).set(metadata)
+            self.logger.info(f"Tracked processed dataset: {processed_dataset_id}")
         except Exception as e:
             self.logger.error(
-                f"Failed to track processed dataset {metadata.processed_dataset_id}: {e}"
+                f"Failed to track processed dataset {metadata.get('processed_dataset_id', 'unknown')}: {e}"
             )
             raise
 
@@ -165,6 +117,29 @@ class DatasetTracker:
         except Exception as e:
             self.logger.error(f"Failed to get user processed datasets: {e}")
             return []
+
+    def get_processed_dataset_metadata(
+        self, processed_dataset_id: str
+    ) -> Optional[dict]:
+        """
+        Get processed dataset metadata by ID.
+
+        Args:
+            processed_dataset_id: Processed dataset unique ID
+
+        Returns:
+            Dict with metadata or None if not found
+        """
+        try:
+            doc = self.processed_collection.document(processed_dataset_id).get()
+            if not doc.exists:
+                return None
+            return doc.to_dict()
+        except Exception as e:
+            self.logger.error(
+                f"Failed to get processed dataset metadata {processed_dataset_id}: {e}"
+            )
+            return None
 
     def delete_processed_dataset_metadata(self, processed_dataset_id: str) -> bool:
         """

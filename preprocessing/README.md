@@ -253,6 +253,15 @@ Vision processing is automatically enabled when image field mappings are detecte
 - Images are processed in the order they appear in the field_mappings
 - Supported image formats: PIL Image objects, base64 strings, file paths, HuggingFace dataset format with `bytes` field
 
+## Metadata Management
+
+The preprocessing service uses a hybrid storage approach:
+
+- **Dataset Files**: Stored in Google Cloud Storage (or local filesystem) as parquet files
+- **Metadata**: Centrally managed in Firestore for consistency and user ownership tracking
+
+Each preprocessed dataset is identified by a unique 8-char UUID based identifier, this field is called `processed_dataset_id`. It is used as the ID for the document and firestore and the folder in GCS. This is different from `dataset_id` which refers to the ID of the **source** dataset, e.g. ID at hugging face or uploaded files.
+
 ## Environment Variables
 
 - `GCS_DATA_BUCKET_NAME`: Google Cloud Storage bucket name (required for GCS storage)
