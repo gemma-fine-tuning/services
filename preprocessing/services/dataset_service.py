@@ -273,11 +273,13 @@ class DatasetService:
                         dataset_subset=metadata["dataset_subset"],
                         dataset_source=metadata["dataset_source"],
                         dataset_id=metadata["dataset_id"],
-                        processed_dataset_id=metadata["processed_dataset_id"],
+                        processed_dataset_id=metadata.get(
+                            "processed_dataset_id", "dataset_name"
+                        ),
                         num_examples=metadata["num_examples"],
                         created_at=metadata["created_at"],
                         splits=[split["split_name"] for split in metadata["splits"]],
-                        modality=metadata["modality"],
+                        modality=metadata.get("modality", "text"),
                     )
                     datasets_info.append(dataset_info)
 

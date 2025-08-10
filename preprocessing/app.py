@@ -38,7 +38,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-storage_type = os.getenv("STORAGE_TYPE", "local")  # "gcs" or "local"
+storage_type = os.getenv("STORAGE_TYPE", "gcs")  # "gcs" or "local"
 
 if storage_type == "gcs":
     bucket_name = os.getenv("GCS_DATA_BUCKET_NAME", "gemma-dataset-bucket")
@@ -148,7 +148,6 @@ def process_dataset(
             "num_examples": result.num_examples,
             "splits": result.full_splits,
             "modality": result.modality,
-            "config": request.config,
         }
         dataset_tracker.track_processed_dataset(processed_metadata)
 

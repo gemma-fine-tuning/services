@@ -112,7 +112,9 @@ class DatasetTracker:
             List of processed dataset IDs
         """
         try:
-            docs = self.processed_collection.where("user_id", "==", user_id).stream()
+            docs = self.processed_collection.where(
+                filter=("user_id", "==", user_id)
+            ).stream()
             return [doc.id for doc in docs]
         except Exception as e:
             self.logger.error(f"Failed to get user processed datasets: {e}")
