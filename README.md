@@ -4,6 +4,10 @@ This project sets up cloud infrastructure on Google Cloud Platform (GCP) for man
 
 Jet Chiang (@supreme-gg-gg) & Adarsh Dubey (@inclinedadarsh) -- Google Summer of Code 2025 @ Google DeepMind
 
+## GSoC Midterm Demo
+
+[![Demo Video](https://img.youtube.com/vi/r4jW997KXvc/0.jpg)](https://www.youtube.com/watch?v=r4jW997KXvc)
+
 ## Features
 
 - Data preprocessing (for vision and text) from custom uploaded and huggingface datasets
