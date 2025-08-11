@@ -2,7 +2,7 @@ import os
 import json
 from typing import Optional, Dict, Any, Tuple, Literal
 from dataclasses import dataclass
-from google.cloud import storage
+from google.cloud import storage, firestore
 from datasets import Dataset
 import logging
 from abc import ABC, abstractmethod
@@ -13,6 +13,48 @@ from huggingface_hub import HfApi, hf_hub_download
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class DatasetTracker:
+    """
+    Centralized dataset metadata management using Firestore.
+    Tracks both raw uploads and processed datasets with user ownership.
+    Uses simple dictionaries instead of complex dataclasses.
+    """
+
+    def __init__(self, project_id: str):
+        """
+        Initialize dataset tracker.
+
+        Args:
+            project_id: Google Cloud project ID
+        """
+        self.db = firestore.Client(project=project_id)
+        self.processed_collection = self.db.collection("processed_datasets")
+        self.logger = logging.getLogger(__name__)
+
+    def get_processed_dataset_metadata(
+        self, processed_dataset_id: str
+    ) -> Optional[dict]:
+        """
+        Get processed dataset metadata by ID.
+
+        Args:
+            processed_dataset_id: Processed dataset unique ID
+
+        Returns:
+            Dict with metadata or None if not found
+        """
+        try:
+            doc = self.processed_collection.document(processed_dataset_id).get()
+            if not doc.exists:
+                return None
+            return doc.to_dict()
+        except Exception as e:
+            self.logger.error(
+                f"Failed to get processed dataset metadata {processed_dataset_id}: {e}"
+            )
+            return None
 
 
 @dataclass
@@ -39,12 +81,19 @@ class CloudStorageService:
     Args:
         data_bucket: GCS bucket name for storing datasets
         export_bucket: GCS bucket name for storing trained model artifacts
+        dataset_tracker: DatasetTracker instance for metadata operations
     """
 
-    def __init__(self, data_bucket: str, export_bucket: str):
+    def __init__(
+        self,
+        data_bucket: str,
+        export_bucket: str,
+        dataset_tracker: Optional[DatasetTracker] = None,
+    ):
         self.data_bucket = data_bucket
         self.export_bucket = export_bucket
         self.storage_client = storage.Client()
+        self.dataset_tracker = dataset_tracker
 
     def upload_model(self, model_dir: str, metadata: CloudStoredModelMetadata) -> str:
         """
@@ -198,8 +247,8 @@ class CloudStorageService:
         Download processed dataset files from GCS and return as HuggingFace Datasets.
 
         Retrieves training and optional evaluation datasets from the configured data bucket.
-        The datasets are expected to be stored as Parquet files with metadata.json in the
-        new preprocessing service format.
+        The datasets are expected to be stored as Parquet files with metadata retrieved
+        from Firestore.
 
         Args:
             processed_dataset_id (str): Identifier for the processed dataset (processed_dataset_id from preprocessing)
@@ -209,25 +258,28 @@ class CloudStorageService:
 
         Raises:
             FileNotFoundError: If the training dataset is not found in GCS
+            ValueError: If no dataset tracker is configured
         """
-        bucket = self.storage_client.bucket(self.data_bucket)
+        if not self.dataset_tracker:
+            raise ValueError("DatasetTracker is required but not configured")
 
-        # First, download and parse the metadata to understand the dataset structure
-        metadata_blob = bucket.blob(
-            f"processed_datasets/{processed_dataset_id}/metadata.json"
+        # Get metadata from Firestore instead of metadata.json
+        metadata = self.dataset_tracker.get_processed_dataset_metadata(
+            processed_dataset_id
         )
-        if not metadata_blob.exists():
+        if not metadata:
             raise FileNotFoundError(
-                f"Dataset metadata not found for {processed_dataset_id}"
+                f"Dataset metadata not found in Firestore for {processed_dataset_id}"
             )
 
-        metadata = json.loads(metadata_blob.download_as_text())
         splits = metadata.get("splits", [])
 
         if not splits:
             raise FileNotFoundError(
                 f"No splits found in dataset {processed_dataset_id}"
             )
+
+        bucket = self.storage_client.bucket(self.data_bucket)
 
         # Find train and test splits
         train_split = None
@@ -638,4 +690,9 @@ class StorageStrategyFactory:
 # default model storage service instance
 data_bucket = os.environ.get("GCS_DATA_BUCKET_NAME", "gemma-dataset-bucket")
 export_bucket = os.environ.get("GCS_EXPORT_BUCKET_NAME", "gemma-export-bucket")
-storage_service = CloudStorageService(data_bucket, export_bucket)
+project_id = os.environ.get("PROJECT_ID")
+
+# Initialize dataset tracker if project_id is available
+dataset_tracker = DatasetTracker(project_id) if project_id else None
+
+storage_service = CloudStorageService(data_bucket, export_bucket, dataset_tracker)
