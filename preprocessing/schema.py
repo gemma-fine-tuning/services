@@ -78,13 +78,14 @@ class DatasetInfoSample(BaseModel):
     # Modality of the dataset: 'text' or 'vision'
     modality: Literal["text", "vision"] = "text"
     dataset_id: str
+    processed_dataset_id: str
     num_examples: int
     created_at: str
     splits: List[str]
 
 
 class ProcessingResult(DatasetInfoSample):
-    pass
+    full_splits: List[Dict[str, Any]] = []
 
 
 class DatasetsInfoResponse(BaseModel):
@@ -98,6 +99,7 @@ class DatasetInfoFull(BaseModel):
     # Modality of the dataset: 'text' or 'vision'
     modality: Literal["text", "vision"] = "text"
     dataset_id: str
+    processed_dataset_id: str
     created_at: str
     splits: List[Dict[str, Any]]
 

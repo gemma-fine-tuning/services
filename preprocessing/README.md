@@ -74,7 +74,7 @@ List all datasets.
 ["dataset1", "dataset2"]
 ```
 
-### GET `/datasets/{dataset_name}`
+### GET `/datasets/{processed_dataset_id}`
 
 Get dataset information.
 
@@ -83,6 +83,7 @@ Get dataset information.
 ```json
 {
   "dataset_name": "your_dataset_name",
+  "processed_dataset_id": "uuid",
   "num_rows": 1234,
   "columns": ["col1", "col2", ...],
   "info": {
@@ -131,7 +132,7 @@ Get dataset information.
 
 > NOTE: Modality is returned when you fetch info for a dataset and it is determined by the service and saved to metadata during processing. It is not set by the user.
 
-### DELETE `/datasets/{dataset_name}/delete`
+### DELETE `/datasets/{processed_dataset_id}/delete`
 
 Delete a dataset and all associated files.
 
@@ -251,6 +252,15 @@ Vision processing is automatically enabled when image field mappings are detecte
 - Images are **always added to user messages only**
 - Images are processed in the order they appear in the field_mappings
 - Supported image formats: PIL Image objects, base64 strings, file paths, HuggingFace dataset format with `bytes` field
+
+## Metadata Management
+
+The preprocessing service uses a hybrid storage approach:
+
+- **Dataset Files**: Stored in Google Cloud Storage (or local filesystem) as parquet files
+- **Metadata**: Centrally managed in Firestore for consistency and user ownership tracking
+
+Each preprocessed dataset is identified by a unique 8-char UUID based identifier, this field is called `processed_dataset_id`. It is used as the ID for the document and firestore and the folder in GCS. This is different from `dataset_id` which refers to the ID of the **source** dataset, e.g. ID at hugging face or uploaded files.
 
 ## Environment Variables
 

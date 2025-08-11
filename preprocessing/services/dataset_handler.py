@@ -1,5 +1,4 @@
 import uuid
-import json
 from datetime import datetime
 import logging
 from typing import Optional, Dict
@@ -181,21 +180,23 @@ class DatasetHandler:
         dataset_subset: str,
         config: PreprocessingConfig,
         dataset_source: str,
-    ) -> str:
+    ) -> tuple[str, str, dict]:
         """
-        Upload a processed dataset to the storage.
-        The directory structure is as follows:
-        - processed_datasets/
-            - dataset_name/
-                - split_name.parquet (all splits are saved in the same directory)
-                - metadata.json (contains the metadata of the dataset)
+        Upload a processed dataset to storage with a unique identifier.
 
         Args:
-            dataset (DatasetDict): The processed dataset to upload
-            dataset_id (str): The unique identifier for the dataset
+            dataset (DatasetDict): The processed dataset splits to upload
+            dataset_name (str): Display name for the dataset (stored as metadata)
+            dataset_id (str): ID of the source dataset
+            dataset_subset (str): Subset of the dataset
+            config (PreprocessingConfig): Configuration used for processing
+            dataset_source (str): Source of the dataset ("upload" or "huggingface")
 
         Returns:
-            str: The file path of the uploaded dataset
+            tuple[str, str, dict]: A tuple containing (dataset_path, processed_dataset_id, metadata)
+                - dataset_path: Storage path for the processed dataset
+                - processed_dataset_id: Unique identifier for the processed dataset
+                - metadata: Dict containing dataset metadata for Firestore
 
         Raises:
             ValueError: If the dataset is empty, if the dataset is not in the correct format,
@@ -207,6 +208,9 @@ class DatasetHandler:
         if not dataset_name:
             raise ValueError("Dataset name is required")
 
+        # Generate unique ID for processed dataset (8-character UUID hex)
+        processed_dataset_id = str(uuid.uuid4()).replace("-", "")[:8]
+
         # Automatically determine modality: 'vision' if any image field mappings, else 'text'
         modality = (
             "vision"
@@ -216,6 +220,7 @@ class DatasetHandler:
         metadata = {
             "splits": [],
             "dataset_name": dataset_name,
+            "processed_dataset_id": processed_dataset_id,
             "upload_type": "processed_upload",
             "upload_date": datetime.now().isoformat(),
             "config": config.model_dump(),
@@ -226,7 +231,7 @@ class DatasetHandler:
             "created_at": datetime.now().isoformat(),
         }
 
-        base_blob_name = f"processed_datasets/{dataset_name}"
+        base_blob_name = f"processed_datasets/{processed_dataset_id}"
 
         for split_name, split_dataset in dataset.items():
             if len(split_dataset) == 0:
@@ -249,24 +254,21 @@ class DatasetHandler:
         if not metadata["splits"]:
             raise ValueError("Cannot upload dataset: all splits are empty")
 
-        metadata_path = self.storage.upload_data(
-            json.dumps(metadata), f"{base_blob_name}/metadata.json"
-        )
+        # Return metadata for Firestore instead of creating metadata.json
+        dataset_path = f"processed_datasets/{processed_dataset_id}/"
 
-        dataset_path = metadata_path.replace("metadata.json", "")
+        return dataset_path, processed_dataset_id, metadata
 
-        return dataset_path
-
-    def does_dataset_exist(self, dataset_name: str) -> bool:
+    def does_dataset_exist(self, processed_dataset_id: str) -> bool:
         """
         Check if a processed dataset exists in storage.
 
         Args:
-            dataset_name (str): Name of the dataset to check
+            processed_dataset_id (str): Unique identifier of the processed dataset to check
 
         Returns:
             bool: True if the dataset exists in processed_datasets/, False otherwise
         """
-        dataset_path = f"processed_datasets/{dataset_name}"
+        dataset_path = f"processed_datasets/{processed_dataset_id}"
         exists = self.storage.file_exists(dataset_path)
         return exists

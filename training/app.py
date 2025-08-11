@@ -1,10 +1,11 @@
 import os
 import logging
 from typing import Optional, List
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from google.cloud import run_v2
 from google.cloud import storage
 from datetime import timedelta, datetime, timezone
+from auth import initialize_firebase, get_current_user_id
 from schema import (
     TrainRequest,
     JobSubmitResponse,
@@ -30,6 +31,9 @@ logging.basicConfig(
 )
 
 logging.info("✅ Training service ready")
+
+# Initialize Firebase
+initialize_firebase()
 
 project_id = os.getenv("PROJECT_ID")
 if not project_id:
@@ -63,7 +67,7 @@ def make_job_id(
     This also makes tracking in firestore consistent.
 
     Args:
-        processed_dataset_id (str): dataset_name, this might contain spaces we need to replace them first
+        processed_dataset_id (str): processed_dataset_id, this might contain spaces we need to replace them first
         base_model_id (str): The ID of the base model
         request (TrainRequest): The request object
 
@@ -77,21 +81,42 @@ def make_job_id(
 
 
 @app.get("/jobs", response_model=JobListResponse)
-async def list_jobs():
+async def list_jobs(current_user_id: str = Depends(get_current_user_id)):
     """List all jobs with job_id and job_name."""
     try:
-        jobs = job_manager.list_jobs()
-        # Only return jobs that have a job_id
-        job_entries = [JobListEntry(**job) for job in jobs if job.get("job_id")]
-        return JobListResponse(jobs=job_entries)
+        # Query Firestore for jobs owned by user
+        docs = job_manager.collection.where("user_id", "==", current_user_id).stream()
+        entries = []
+        for doc in docs:
+            data = doc.to_dict() or {}
+            entries.append(
+                JobListEntry(
+                    job_id=data.get("job_id"),
+                    job_name=data.get("job_name"),
+                    base_model_id=data.get("base_model_id"),
+                    status=data.get("status", "unknown"),
+                    modality=data.get("modality", "text"),
+                )
+            )
+        return JobListResponse(jobs=entries)
     except Exception as e:
-        logging.error(f"Failed to list jobs: {str(e)}")
+        logging.error(f"Failed to list jobs: {e}")
         raise HTTPException(status_code=500, detail="Failed to list jobs")
 
 
 @app.post("/train", response_model=JobSubmitResponse)
-async def start_training(request: TrainRequest):
+async def start_training(
+    request: TrainRequest,
+    current_user_id: str = Depends(get_current_user_id),
+):
     processed_dataset_id = request.processed_dataset_id
+
+    # Verify ownership of the processed dataset before starting the job
+    if not job_manager.verify_processed_dataset_ownership(
+        processed_dataset_id, current_user_id
+    ):
+        raise HTTPException(status_code=404, detail="Processed dataset not found")
+
     base_model_id = request.training_config.base_model_id
     job_id = make_job_id(processed_dataset_id, base_model_id, request)
 
@@ -114,6 +139,7 @@ async def start_training(request: TrainRequest):
         base_model_id=request.training_config.base_model_id,
         job_name=request.job_name,
         modality=request.training_config.modality,
+        user_id=current_user_id,
     )
     job_manager.ensure_job_document_exists(job_id, job_metadata)
 
@@ -162,12 +188,18 @@ async def start_training(request: TrainRequest):
 
 
 @app.get("/jobs/{job_id}/download/gguf", response_model=DownloadUrlResponse)
-async def download_gguf_file(job_id: str):
+async def download_gguf_file(
+    job_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
     """
     Generate a signed URL for downloading the GGUF file of a specific job.
     This is a convenience endpoint that automatically finds the GGUF file path from job status.
     """
     try:
+        # Verify ownership
+        if not job_manager.verify_job_ownership(job_id, current_user_id):
+            raise HTTPException(status_code=404, detail="Job not found")
         # Get job status to find GGUF path
         job_data = job_manager.get_job_status_dict(job_id)
         if not job_data:
@@ -305,12 +337,19 @@ def delete_gcs_resources(
 
 
 @app.delete("/jobs/{job_id}/delete", response_model=JobDeleteResponse)
-async def delete_job(job_id: str):
+async def delete_job(
+    job_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
     """
     Delete a job and all associated GCS resources.
     This includes the job metadata, config file, adapter/merged model, and GGUF file if available.
     """
     try:
+        # Verify ownership
+        if not job_manager.verify_job_ownership(job_id, current_user_id):
+            raise HTTPException(status_code=404, detail="Job not found")
+
         # First, get job data to find associated resources
         job_data = job_manager.get_job_status_dict(job_id)
         if not job_data:
@@ -347,11 +386,19 @@ async def delete_job(job_id: str):
 
 
 @app.get("/jobs/{job_id}/status", response_model=JobStatusResponse)
-async def get_job_status(job_id: str):
+async def get_job_status(
+    job_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    # Verify ownership
+    if not job_manager.verify_job_ownership(job_id, current_user_id):
+        raise HTTPException(status_code=404, detail="Job not found")
+
     job_data = job_manager.get_job_status_dict(job_id)
     if not job_data:
         logging.error(f"Job not found: {job_id}")
         raise HTTPException(status_code=404, detail="Job not found")
+
     return job_data
 
 

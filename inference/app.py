@@ -1,9 +1,10 @@
 import os
 import logging
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.concurrency import run_in_threadpool
 from google.cloud import firestore
 from huggingface_hub import login
+from auth import initialize_firebase, get_current_user_id
 from schema import (
     InferenceRequest,
     InferenceResponse,
@@ -32,6 +33,9 @@ if not project_id:
     raise ValueError("PROJECT_ID environment variable must be set for Firestore client")
 db = firestore.Client(project=project_id)
 
+# Initialize Firebase
+initialize_firebase()
+
 logging.info("✅ Inference service ready")
 
 
@@ -50,7 +54,10 @@ def login_hf(hf_token: Optional[str]):
 
 
 @app.post("/inference", response_model=InferenceResponse)
-async def inference(request: InferenceRequest):
+async def inference(
+    request: InferenceRequest,
+    current_user_id: str = Depends(get_current_user_id),
+):
     """Run inference using a trained adapter"""
     try:
         login_hf(request.hf_token)
@@ -70,7 +77,10 @@ async def inference(request: InferenceRequest):
 
 
 @app.post("/batch_inference", response_model=BatchInferenceResponse)
-async def batch_inference(request: BatchInferenceRequest):
+async def batch_inference(
+    request: BatchInferenceRequest,
+    current_user_id: str = Depends(get_current_user_id),
+):
     """Run batch inference using a trained adapter"""
     messages = request.messages
     if not messages or not isinstance(messages, list) or len(messages) == 0:
@@ -93,9 +103,25 @@ async def batch_inference(request: BatchInferenceRequest):
 
 
 @app.post("/evaluation", response_model=EvaluationResponse)
-async def evaluation(request: EvaluationRequest):
+async def evaluation(
+    request: EvaluationRequest,
+    current_user_id: str = Depends(get_current_user_id),
+):
     """Run evaluation of a fine-tuned model on a dataset"""
     try:
+        # Verify dataset ownership before evaluating
+        try:
+            doc = db.collection("processed_datasets").document(request.dataset_id).get()
+            if not doc.exists or doc.to_dict().get("user_id") != current_user_id:
+                raise HTTPException(status_code=404, detail="Dataset not found")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logging.error(f"Failed to verify dataset ownership: {e}")
+            raise HTTPException(
+                status_code=500, detail="Failed to verify dataset ownership"
+            )
+
         login_hf(request.hf_token)
         result = await run_in_threadpool(
             run_evaluation,

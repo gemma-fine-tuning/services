@@ -2,7 +2,7 @@ import os
 import json
 from typing import Optional, Dict, Any, Tuple, Literal
 from dataclasses import dataclass
-from google.cloud import storage
+from google.cloud import storage, firestore
 from datasets import Dataset
 import logging
 from abc import ABC, abstractmethod
@@ -15,6 +15,48 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+class DatasetTracker:
+    """
+    Centralized dataset metadata management using Firestore.
+    Tracks both raw uploads and processed datasets with user ownership.
+    Uses simple dictionaries instead of complex dataclasses.
+    """
+
+    def __init__(self, project_id: str):
+        """
+        Initialize dataset tracker.
+
+        Args:
+            project_id: Google Cloud project ID
+        """
+        self.db = firestore.Client(project=project_id)
+        self.processed_collection = self.db.collection("processed_datasets")
+        self.logger = logging.getLogger(__name__)
+
+    def get_processed_dataset_metadata(
+        self, processed_dataset_id: str
+    ) -> Optional[dict]:
+        """
+        Get processed dataset metadata by ID.
+
+        Args:
+            processed_dataset_id: Processed dataset unique ID
+
+        Returns:
+            Dict with metadata or None if not found
+        """
+        try:
+            doc = self.processed_collection.document(processed_dataset_id).get()
+            if not doc.exists:
+                return None
+            return doc.to_dict()
+        except Exception as e:
+            self.logger.error(
+                f"Failed to get processed dataset metadata {processed_dataset_id}: {e}"
+            )
+            return None
+
+
 @dataclass
 class CloudStoredModelMetadata:
     job_id: str
@@ -25,10 +67,7 @@ class CloudStoredModelMetadata:
     hf_repo_id: Optional[str] = None  # HuggingFace repo ID if applicable
 
     # these must match the value in export_config
-    export_format: Optional[str] = (
-        None  # Format of the exported model (e.g., gguf, adapter)
-    )
-    quantization: Optional[str] = None  # Quantization type if applicable
+    export_format: Optional[str] = None
 
 
 class CloudStorageService:
@@ -40,15 +79,21 @@ class CloudStorageService:
     Provides a unified interface for cloud storage operations across the training pipeline.
 
     Args:
-        storage_client: Google Cloud Storage client instance
         data_bucket: GCS bucket name for storing datasets
         export_bucket: GCS bucket name for storing trained model artifacts
+        dataset_tracker: DatasetTracker instance for metadata operations
     """
 
-    def __init__(self, data_bucket: str, export_bucket: str):
+    def __init__(
+        self,
+        data_bucket: str,
+        export_bucket: str,
+        dataset_tracker: Optional[DatasetTracker] = None,
+    ):
         self.data_bucket = data_bucket
         self.export_bucket = export_bucket
         self.storage_client = storage.Client()
+        self.dataset_tracker = dataset_tracker
 
     def upload_model(self, model_dir: str, metadata: CloudStoredModelMetadata) -> str:
         """
@@ -86,7 +131,6 @@ class CloudStorageService:
                 "base_model_id": metadata.base_model_id,
                 "provider": metadata.provider,
                 "export_format": metadata.export_format,
-                "quantization": metadata.quantization,
                 "hf_repo_id": metadata.hf_repo_id,
             }
             # NOTE: Avoid using config.json because it conflicts with the model config file!
@@ -100,6 +144,33 @@ class CloudStorageService:
         except Exception as e:
             logger.error(
                 f"Error uploading model artifacts to GCS for job {metadata.job_id}: {e}",
+                exc_info=True,
+            )
+            raise
+
+    def upload_file(self, local_file_path: str, remote_file_path: str) -> str:
+        """
+        Upload a single file to GCS.
+
+        Args:
+            local_file_path (str): Local path to the file to upload
+            remote_file_path (str): Remote path in GCS where the file will be stored
+                This should include all the prefixes like gguf_models/file_id_here
+
+        Returns:
+            str: GCS URI where the file is stored
+        """
+        try:
+            bucket = self.storage_client.bucket(self.export_bucket)
+
+            # Upload the file
+            blob = bucket.blob(remote_file_path)
+            blob.upload_from_filename(local_file_path)
+
+            return f"gs://{self.export_bucket}/{remote_file_path}"
+        except Exception as e:
+            logger.error(
+                f"Error uploading file {local_file_path} to GCS: {e}",
                 exc_info=True,
             )
             raise
@@ -165,7 +236,6 @@ class CloudStorageService:
             local_dir=local_dir,
             hf_repo_id=meta.get("hf_repo_id"),
             export_format=meta.get("export_format"),
-            quantization=meta.get("quantization"),
         )
 
         return metadata
@@ -177,36 +247,39 @@ class CloudStorageService:
         Download processed dataset files from GCS and return as HuggingFace Datasets.
 
         Retrieves training and optional evaluation datasets from the configured data bucket.
-        The datasets are expected to be stored as Parquet files with metadata.json in the
-        new preprocessing service format.
+        The datasets are expected to be stored as Parquet files with metadata retrieved
+        from Firestore.
 
         Args:
-            processed_dataset_id (str): Identifier for the processed dataset (dataset_name from preprocessing)
+            processed_dataset_id (str): Identifier for the processed dataset (processed_dataset_id from preprocessing)
 
         Returns:
             Tuple[Dataset, Optional[Dataset]]: Train and eval datasets
 
         Raises:
             FileNotFoundError: If the training dataset is not found in GCS
+            ValueError: If no dataset tracker is configured
         """
-        bucket = self.storage_client.bucket(self.data_bucket)
+        if not self.dataset_tracker:
+            raise ValueError("DatasetTracker is required but not configured")
 
-        # First, download and parse the metadata to understand the dataset structure
-        metadata_blob = bucket.blob(
-            f"processed_datasets/{processed_dataset_id}/metadata.json"
+        # Get metadata from Firestore instead of metadata.json
+        metadata = self.dataset_tracker.get_processed_dataset_metadata(
+            processed_dataset_id
         )
-        if not metadata_blob.exists():
+        if not metadata:
             raise FileNotFoundError(
-                f"Dataset metadata not found for {processed_dataset_id}"
+                f"Dataset metadata not found in Firestore for {processed_dataset_id}"
             )
 
-        metadata = json.loads(metadata_blob.download_as_text())
         splits = metadata.get("splits", [])
 
         if not splits:
             raise FileNotFoundError(
                 f"No splits found in dataset {processed_dataset_id}"
             )
+
+        bucket = self.storage_client.bucket(self.data_bucket)
 
         # Find train and test splits
         train_split = None
@@ -310,22 +383,31 @@ class ModelStorageStrategy(ABC):
 
     @abstractmethod
     def save_model(
-        self, model, tokenizer, local_path: str, metadata: Dict[str, Any]
+        self, local_path: str, metadata: CloudStoredModelMetadata
     ) -> ModelArtifact:
         """
-        Save model artifacts and return artifact reference.
-
-        Persists the trained model and tokenizer to the storage backend and returns
-        a ModelArtifact containing metadata and paths for later retrieval.
+        Upload model artifacts from local path to storage backend.
 
         Args:
-            model: The trained model (can be a trainer, model, or adapter)
-            tokenizer: The tokenizer associated with the model
-            local_path: Local directory path for temporary storage
+            local_path: Local directory containing saved model files
             metadata: Dictionary containing job_id, base_model_id, and storage-specific config
 
         Returns:
             ModelArtifact: Artifact reference with paths and metadata
+        """
+        pass
+
+    @abstractmethod
+    def save_file(self, local_file_path: str, remote_path_or_repo_id: str) -> str:
+        """
+        Upload a single file to storage backend.
+
+        Args:
+            local_file_path: Local path to the file (e.g., GGUF file)
+            remote_path_or_repo_id: remote path in the export bucket or hf repo id
+
+        Returns:
+            str: GCS URI or hugging face repo and file path to the uploaded file
         """
         pass
 
@@ -387,10 +469,22 @@ class GCSStorageStrategy(ModelStorageStrategy):
             provider=metadata.provider,
             metadata={
                 "export_format": metadata.export_format,
-                "quantization": metadata.quantization,
                 "gcs_prefix": metadata.gcs_prefix,
             },
         )
+
+    def save_file(self, local_file_path: str, remote_path_or_repo_id: str) -> str:
+        """
+        Upload a single file to GCS.
+
+        Args:
+            local_file_path: Local path to the file (e.g., GGUF file)
+            remote_path_or_repo_id: Remote path in GCS where the file will be stored
+
+        Returns:
+            str: GCS URI where the file is stored
+        """
+        return self.storage_service.upload_file(local_file_path, remote_path_or_repo_id)
 
     def load_model_info(self, adapter_path: str) -> ModelArtifact:
         """Load model from GCS"""
@@ -437,6 +531,7 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
 
         try:
             api = HfApi()
+            # Need to create the repo first then upload folder
             api.create_repo(
                 repo_id=hf_repo_id,
                 repo_type="model",
@@ -461,6 +556,44 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
             metadata={"hf_repo_id": hf_repo_id},
         )
 
+    def save_file(self, local_file_path: str, remote_path_or_repo_id: str) -> str:
+        """
+        Upload a single file to HuggingFace Hub repository.
+
+        Args:
+            local_file_path: Local path to the file (e.g., GGUF file)
+            remote_file_path: HF repo id where this file will be stored
+
+        Returns:
+            str: Remote path in HuggingFace Hub where the file is stored
+        """
+        file_name = os.path.basename(local_file_path)
+        logging.info(
+            f"Uploading file {file_name} to HuggingFace Hub: {remote_path_or_repo_id}"
+        )
+
+        try:
+            api = HfApi()
+            # Create repo if it doesn't exist
+            api.create_repo(
+                repo_id=remote_path_or_repo_id,
+                repo_type="model",
+                private=True,
+                exist_ok=True,
+            )
+            # Upload the single file
+            api.upload_file(
+                path_or_fileobj=local_file_path,
+                path_in_repo=file_name,
+                repo_id=remote_path_or_repo_id,
+                repo_type="model",
+            )
+        except Exception as e:
+            logging.error(f"Failed to upload file to HuggingFace Hub: {e}")
+            raise
+
+        return f"{remote_path_or_repo_id}/{file_name}"
+
     def load_model_info(self, repo_id: str) -> ModelArtifact:
         """
         Load model info from HuggingFace Hub.
@@ -476,9 +609,9 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
             ModelArtifact: Model metadata for inference setup
         """
         try:
-            # Try adapter config first, this will raise EntryNotFoundError if file not found
+            # Try adapter config first
             adapter_config_path = hf_hub_download(
-                repo_id=repo_id, repo_type="model", filename="adapter_config.json"
+                repo_id=repo_id, filename="adapter_config.json"
             )
             with open(adapter_config_path, "r") as f:
                 adapter_config = json.load(f)
@@ -486,8 +619,8 @@ class HuggingFaceHubStrategy(ModelStorageStrategy):
             provider = (
                 "unsloth" if base_model_id.startswith("unsloth/") else "huggingface"
             )
-        except Exception:  # This will happen if it's not an adapter (i.e. merged model)
-            logging.info(
+        except Exception:
+            logging.warning(
                 f"Failed to load adapter config for {repo_id}, falling back to repo_id as model_id"
             )
             base_model_id = repo_id
@@ -557,4 +690,9 @@ class StorageStrategyFactory:
 # default model storage service instance
 data_bucket = os.environ.get("GCS_DATA_BUCKET_NAME", "gemma-dataset-bucket")
 export_bucket = os.environ.get("GCS_EXPORT_BUCKET_NAME", "gemma-export-bucket")
-storage_service = CloudStorageService(data_bucket, export_bucket)
+project_id = os.environ.get("PROJECT_ID")
+
+# Initialize dataset tracker if project_id is available
+dataset_tracker = DatasetTracker(project_id) if project_id else None
+
+storage_service = CloudStorageService(data_bucket, export_bucket, dataset_tracker)

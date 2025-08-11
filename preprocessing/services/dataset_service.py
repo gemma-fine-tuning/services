@@ -1,9 +1,7 @@
 import io
-import json
 import logging
 import pyarrow.parquet as pq
 import base64
-from datetime import datetime
 from datasets import Dataset, DatasetDict
 from typing import Dict, Literal, Optional
 from PIL import Image
@@ -183,10 +181,8 @@ class DatasetService:
             ... )
         """
         try:
-            if self.handler.does_dataset_exist(dataset_name):
-                raise ValueError(
-                    f"Dataset {dataset_name} already exists. Please use a different name."
-                )
+            # Check if dataset name is already taken (we'll remove this check since we use unique IDs now)
+            # We can keep similar names as they will have different unique IDs
 
             # Load dataset with splits
             dataset = self.loader.load_dataset(
@@ -210,119 +206,133 @@ class DatasetService:
                     processed_dataset, augmentation_config
                 )
 
-            # Save all splits
-            self.handler.upload_processed_dataset(
-                processed_dataset,
-                dataset_name,
-                dataset_id,
-                dataset_subset,
-                config,
-                dataset_source,
+            # Save all splits and get the unique processed dataset ID
+            dataset_path, processed_dataset_id, metadata = (
+                self.handler.upload_processed_dataset(
+                    processed_dataset,
+                    dataset_name,
+                    dataset_id,
+                    dataset_subset,
+                    config,
+                    dataset_source,
+                )
             )
 
-            return ProcessingResult(
+            # Extract just the split names for ProcessingResult
+            split_names = [split["split_name"] for split in metadata["splits"]]
+
+            # Create the ProcessingResult with an additional metadata field
+            result = ProcessingResult(
                 dataset_name=dataset_name,
                 dataset_subset=dataset_subset,
                 dataset_source=dataset_source,
-                dataset_id=dataset_id,
-                num_examples=len(processed_dataset["train"]),
-                created_at=datetime.now().isoformat(),
-                splits=list(processed_dataset.keys()),
+                dataset_id=dataset_id,  # Keep original source dataset ID
+                processed_dataset_id=processed_dataset_id,  # Add unique processed dataset ID
+                num_examples=sum(split["num_rows"] for split in metadata["splits"]),
+                created_at=metadata["created_at"],
+                splits=split_names,
+                modality=metadata["modality"],
+                full_splits=metadata["splits"],
             )
+
+            return result
 
         except Exception as e:
             logger.error(f"Error processing dataset: {str(e)}")
             raise
 
-    def get_datasets_info(self) -> DatasetsInfoResponse:
+    def get_datasets_info(self, user_id: str, dataset_tracker) -> DatasetsInfoResponse:
         """
-        Get information about all the processed datasets.
+        Get information about all processed datasets owned by a specific user.
 
-        This method:
-        1. Lists all directories in the processed_datasets/ folder
-        2. For each dataset directory, reads the metadata.json file
-        3. Extracts the required information and returns it as a DatasetsInfoResponse
+        Args:
+            user_id: User ID to filter datasets
+            dataset_tracker: DatasetTracker instance to get metadata from Firestore
 
         Returns:
-            DatasetsInfoResponse: An object containing a list of DatasetInfoSample objects
-                with information about each processed dataset
-
-        Raises:
-            Exception: If there's an error reading the datasets information
+            DatasetsInfoResponse: List of datasets owned by the user
         """
         try:
-            all_files = self.storage.list_files(prefix="processed_datasets/")
+            if dataset_tracker is None:
+                raise ValueError(
+                    "dataset_tracker is required for Firestore metadata lookup"
+                )
 
-            dataset_names = set()
-
-            for file_path in all_files:
-                if file_path.startswith("processed_datasets/"):
-                    parts = file_path.split("/")
-                    if len(parts) >= 3:
-                        dataset_names.add(parts[1])
+            # Get all processed datasets owned by the user directly from Firestore
+            user_dataset_ids = dataset_tracker.get_user_processed_datasets(user_id)
 
             datasets_info = []
-
-            for dataset_name in dataset_names:
-                try:
-                    metadata_path = f"processed_datasets/{dataset_name}/metadata.json"
-
-                    if not self.storage.file_exists(metadata_path):
-                        logger.warning(
-                            f"Metadata file not found for dataset: {dataset_name}"
-                        )
-                        continue
-
-                    metadata_content = self.storage.download_data(metadata_path)
-                    metadata = json.loads(metadata_content)
-
-                    total_examples = 0
-                    for split in metadata.get("splits", []):
-                        total_examples += split.get("num_rows", 0)
-
+            for processed_dataset_id in user_dataset_ids:
+                metadata = dataset_tracker.get_processed_dataset_metadata(
+                    processed_dataset_id
+                )
+                if metadata:
+                    # Convert metadata to DatasetInfoSample format
                     dataset_info = DatasetInfoSample(
-                        dataset_name=metadata.get("dataset_name"),
-                        dataset_subset=metadata.get("dataset_subset"),
-                        dataset_source=metadata.get("dataset_source"),
-                        dataset_id=metadata.get("dataset_id"),
-                        num_examples=total_examples,
-                        created_at=metadata.get("upload_date"),
-                        splits=[
-                            split.get("split_name")
-                            for split in metadata.get("splits", [])
-                        ],
+                        dataset_name=metadata["dataset_name"],
+                        dataset_subset=metadata["dataset_subset"],
+                        dataset_source=metadata["dataset_source"],
+                        dataset_id=metadata["dataset_id"],
+                        processed_dataset_id=metadata.get(
+                            "processed_dataset_id", "dataset_name"
+                        ),
+                        num_examples=metadata["num_examples"],
+                        created_at=metadata["created_at"],
+                        splits=[split["split_name"] for split in metadata["splits"]],
                         modality=metadata.get("modality", "text"),
                     )
-
                     datasets_info.append(dataset_info)
-
-                except Exception as e:
-                    logger.error(
-                        f"Error reading metadata for dataset {dataset_name}: {str(e)}"
-                    )
-                    continue
 
             return DatasetsInfoResponse(datasets=datasets_info)
 
         except Exception as e:
-            logger.error(f"Error getting datasets info: {str(e)}")
+            logger.error(f"Error getting datasets info for user {user_id}: {str(e)}")
             raise
 
-    def get_dataset_info(self, dataset_name: str) -> DatasetInfoResponse:
+    def get_dataset_info(
+        self, processed_dataset_id: str, dataset_tracker=None
+    ) -> DatasetInfoResponse:
         """
         Get information about a dataset including samples from each split.
         For vision datasets, PIL Images (bytes) are automatically converted to base64 data URLs for API compatibility.
+
+        Args:
+            processed_dataset_id: Unique identifier for the processed dataset
+            dataset_tracker: DatasetTracker instance to get metadata from Firestore
         """
         try:
-            metadata_path = f"processed_datasets/{dataset_name}/metadata.json"
-            metadata_content = self.storage.download_data(metadata_path)
-            metadata = json.loads(metadata_content)
+            # Get metadata from Firestore instead of metadata.json
+            if dataset_tracker is None:
+                raise ValueError(
+                    "dataset_tracker is required for Firestore metadata lookup"
+                )
+
+            metadata_obj = dataset_tracker.get_processed_dataset_metadata(
+                processed_dataset_id
+            )
+            if not metadata_obj:
+                raise FileNotFoundError(
+                    f"Dataset metadata not found: {processed_dataset_id}"
+                )
+
+            # metadata_obj is now a dict, not a dataclass
+            metadata = {
+                "dataset_name": metadata_obj["dataset_name"],
+                "dataset_subset": metadata_obj["dataset_subset"],
+                "dataset_source": metadata_obj["dataset_source"],
+                "dataset_id": metadata_obj["dataset_id"],
+                "upload_date": metadata_obj["created_at"],
+                "modality": metadata_obj["modality"],
+                "splits": metadata_obj["splits"],
+            }
 
             # Get splits information with samples
             splits_with_samples = []
             for split_info in metadata.get("splits", []):
                 split_name = split_info.get("split_name")
-                split_path = f"processed_datasets/{dataset_name}/{split_name}.parquet"
+                split_path = (
+                    f"processed_datasets/{processed_dataset_id}/{split_name}.parquet"
+                )
 
                 # Get samples from the split
                 samples = []
@@ -360,6 +370,7 @@ class DatasetService:
                 dataset_subset=metadata.get("dataset_subset"),
                 dataset_source=metadata.get("dataset_source"),
                 dataset_id=metadata.get("dataset_id"),
+                processed_dataset_id=processed_dataset_id,
                 created_at=metadata.get("upload_date"),
                 splits=splits_with_samples,
                 modality=metadata.get("modality", "text"),

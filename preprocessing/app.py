@@ -1,9 +1,11 @@
 import os
 import logging
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from storage import GCSStorageManager, LocalStorageManager
 from services.dataset_service import DatasetService
+from dataset_tracker import DatasetTracker
+from auth import initialize_firebase, get_current_user_id
 from schema import (
     DatasetUploadResponse,
     PreprocessingRequest,
@@ -12,6 +14,12 @@ from schema import (
     DatasetInfoResponse,
     DatasetDeleteResponse,
 )
+
+project_id = os.getenv("PROJECT_ID")
+dataset_tracker = DatasetTracker(project_id)
+
+# Initialize Firebase
+initialize_firebase()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,7 +38,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-storage_type = os.getenv("STORAGE_TYPE", "local")  # "gcs" or "local"
+storage_type = os.getenv("STORAGE_TYPE", "gcs")  # "gcs" or "local"
 
 if storage_type == "gcs":
     bucket_name = os.getenv("GCS_DATA_BUCKET_NAME", "gemma-dataset-bucket")
@@ -56,7 +64,10 @@ async def health_check():
 
 
 @app.post("/upload", response_model=DatasetUploadResponse)
-async def upload_dataset(file: UploadFile = File(...)):
+async def upload_dataset(
+    file: UploadFile = File(...),
+    current_user_id: str = Depends(get_current_user_id),
+):
     """Upload a dataset file to storage"""
     try:
         file_content = await file.read()
@@ -64,8 +75,19 @@ async def upload_dataset(file: UploadFile = File(...)):
         result = dataset_service.upload_dataset(
             file_data=file_content,
             filename=file.filename or "unknown",
-            metadata={"content_type": file.content_type},
+            metadata={"content_type": file.content_type, "user_id": current_user_id},
         )
+        # Track raw dataset metadata
+        raw_metadata = {
+            "dataset_id": result.dataset_id,
+            "gcs_path": result.gcs_path,
+            "user_id": current_user_id,
+            "filename": result.filename,
+            "content_type": file.content_type or "unknown",
+            "size_bytes": result.size_bytes,
+            "created_at": result.created_at,
+        }
+        dataset_tracker.track_raw_dataset(raw_metadata)
 
         return result
 
@@ -75,7 +97,10 @@ async def upload_dataset(file: UploadFile = File(...)):
 
 
 @app.post("/process", response_model=ProcessingResult)
-def process_dataset(request: PreprocessingRequest):
+def process_dataset(
+    request: PreprocessingRequest,
+    current_user_id: str = Depends(get_current_user_id),
+):
     """Process a dataset into ChatML format
 
     The processing converts the dataset to ChatML format using the provided configuration.
@@ -92,6 +117,16 @@ def process_dataset(request: PreprocessingRequest):
     ```
     """
     try:
+        # For uploaded datasets, verify ownership of the raw dataset
+        if request.dataset_source == "upload":
+            if not dataset_tracker.verify_raw_dataset_ownership(
+                request.dataset_id, current_user_id
+            ):
+                raise HTTPException(
+                    status_code=404,
+                    detail="Source dataset not found or not owned by user",
+                )
+
         result = dataset_service.process_dataset(
             dataset_name=request.dataset_name,
             dataset_source=request.dataset_source,
@@ -99,6 +134,23 @@ def process_dataset(request: PreprocessingRequest):
             dataset_subset=request.dataset_subset,
             config=request.config,
         )
+
+        # Use the complete metadata from the result for Firestore storage
+        # Note: result.full_metadata contains the complete splits info as List[Dict]
+        processed_metadata = {
+            "processed_dataset_id": result.processed_dataset_id,
+            "dataset_name": request.dataset_name,
+            "user_id": current_user_id,
+            "dataset_id": request.dataset_id,
+            "dataset_source": request.dataset_source,
+            "dataset_subset": request.dataset_subset,
+            "created_at": result.created_at,
+            "num_examples": result.num_examples,
+            "splits": result.full_splits,
+            "modality": result.modality,
+        }
+        dataset_tracker.track_processed_dataset(processed_metadata)
+
         return result
 
     except Exception as e:
@@ -107,13 +159,14 @@ def process_dataset(request: PreprocessingRequest):
 
 
 @app.get("/datasets", response_model=DatasetsInfoResponse)
-def get_datasets_info():
+def get_datasets_info(
+    current_user_id: str = Depends(get_current_user_id),
+):
     """
-    Get information about all the processed datasets.
+    Get information about all the processed datasets owned by the user.
     """
     try:
-        result = dataset_service.get_datasets_info()
-        return result
+        return dataset_service.get_datasets_info(current_user_id, dataset_tracker)
     except Exception as e:
         logger.error(f"Error getting datasets info: {str(e)}")
         raise HTTPException(
@@ -121,14 +174,21 @@ def get_datasets_info():
         )
 
 
-@app.get("/datasets/{dataset_name}", response_model=DatasetInfoResponse)
-def get_dataset_info(dataset_name: str):
+@app.get("/datasets/{processed_dataset_id}", response_model=DatasetInfoResponse)
+def get_dataset_info(
+    processed_dataset_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
     """
-    Get information about a dataset.
+    Get information about a dataset using its unique processed dataset ID.
     """
     try:
-        result = dataset_service.get_dataset_info(dataset_name)
-        return result
+        # verify ownership of processed dataset
+        if not dataset_tracker.verify_processed_dataset_ownership(
+            processed_dataset_id, current_user_id
+        ):
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        return dataset_service.get_dataset_info(processed_dataset_id, dataset_tracker)
     except Exception as e:
         logger.error(f"Error getting dataset info: {str(e)}")
         raise HTTPException(
@@ -136,18 +196,46 @@ def get_dataset_info(dataset_name: str):
         )
 
 
-@app.delete("/datasets/{dataset_name}/delete", response_model=DatasetDeleteResponse)
-def delete_dataset(dataset_name: str):
+@app.delete(
+    "/datasets/{processed_dataset_id}/delete", response_model=DatasetDeleteResponse
+)
+def delete_dataset(
+    processed_dataset_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
     """
-    Delete a dataset and all associated files.
+    Delete a dataset and all associated files using its unique processed dataset ID.
     NOTE: This only deletes preprocessed dataset, NOT raw dataset files!
     """
     try:
         deleted_resources = []
         total_deleted_files = 0
 
-        # Delete processed dataset (parquet files and metadata.json)
-        processed_prefix = f"processed_datasets/{dataset_name}"
+        # verify ownership of processed dataset
+        if not dataset_tracker.verify_processed_dataset_ownership(
+            processed_dataset_id, current_user_id
+        ):
+            raise HTTPException(
+                status_code=404, detail="Dataset not found or not owned by user"
+            )
+
+        # Get dataset name from Firestore metadata for response
+        try:
+            processed_metadata = dataset_tracker.get_processed_dataset_metadata(
+                processed_dataset_id
+            )
+            dataset_name = (
+                processed_metadata["dataset_name"]
+                if processed_metadata
+                else processed_dataset_id
+            )
+        except Exception:
+            dataset_name = (
+                processed_dataset_id  # fallback to ID if metadata unavailable
+            )
+
+        # Delete processed dataset (parquet files only, metadata is in Firestore)
+        processed_prefix = f"processed_datasets/{processed_dataset_id}"
         processed_files = storage_manager.list_files(prefix=processed_prefix)
         if processed_files:
             deleted_count = storage_manager.delete_directory(processed_prefix)
@@ -163,6 +251,9 @@ def delete_dataset(dataset_name: str):
             message = f"Dataset '{dataset_name}' not found or already deleted"
             logger.warning(message)
 
+        # remove metadata for processed dataset
+        if total_deleted_files > 0:
+            dataset_tracker.delete_processed_dataset_metadata(processed_dataset_id)
         return DatasetDeleteResponse(
             dataset_name=dataset_name,
             deleted=total_deleted_files > 0,
