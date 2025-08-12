@@ -43,7 +43,6 @@ Start a new training job.
   },
   "export_config": {
     "format": "adapter" | "merged",
-    "quantization": "none" | "f16" | "bf16" | "q8_0" | "q4_k_m",
     "destination": "gcs" | "hfhub",
     "hf_repo_id": "user/model-name",
     "include_gguf": false,
