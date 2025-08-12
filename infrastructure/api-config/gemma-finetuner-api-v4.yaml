@@ -194,6 +194,7 @@ paths:
           schema:
             type: "string"
 
+# These only contain projectID not secret values!!
 securityDefinitions:
   firebase:
     authorizationUrl: ""
