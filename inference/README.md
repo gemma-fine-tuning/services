@@ -27,7 +27,7 @@ gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
 
 Single inference request. The service automatically detects storage type from the adapter path. Both `adapter_path` and `base_model_id` are accessible on the job object in the frontend because the training service returns these fields.
 
-> This is for text only!!! You should use `/batch_inference` for more complex structure or vision fields, the messages can be obtained from the preprocessing service.
+> This is for text only!!! You should use `/inference/batch` for more complex structure or vision fields, the messages can be obtained from the preprocessing service.
 
 **Request:**
 
@@ -53,7 +53,7 @@ Single inference request. The service automatically detects storage type from th
 }
 ```
 
-### POST `/batch_inference`
+### POST `/inference/batch`
 
 Batch inference for multiple conversations.
 

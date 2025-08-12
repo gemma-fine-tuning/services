@@ -1,11 +1,12 @@
 import os
 import logging
+import json
+import base64
 from typing import Optional, List
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from google.cloud import run_v2
 from google.cloud import storage
 from datetime import timedelta, datetime, timezone
-from auth import initialize_firebase, get_current_user_id
 from schema import (
     TrainRequest,
     JobSubmitResponse,
@@ -15,7 +16,6 @@ from schema import (
     DownloadUrlResponse,
     JobDeleteResponse,
 )
-import json
 import uvicorn
 import hashlib
 from job_manager import JobStateManager, JobMetadata, JobStatus
@@ -32,8 +32,6 @@ logging.basicConfig(
 
 logging.info("✅ Training service ready")
 
-# Initialize Firebase
-initialize_firebase()
 
 project_id = os.getenv("PROJECT_ID")
 if not project_id:
@@ -50,6 +48,52 @@ GCS_EXPORT_BUCKET = os.getenv("GCS_EXPORT_BUCKET_NAME", "gemma-export-bucket")
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "training"}
+
+
+# Auth dependency for API Gateway
+def get_current_user_id(request: Request) -> str:
+    """
+    Extract user ID from X-Apigateway-Api-Userinfo header set by API Gateway.
+    The gateway requires the JWT to contain iss (issuer), sub (subject), aud (audience), iat (issued at), exp (expiration time) claims
+    API Gateway will send the authentication result in the X-Apigateway-Api-Userinfo to the backend API whcih contains the base64url encoded content of the JWT payload.
+    In this case, the gateway will override the original Authorization header with this X-Apigateway-Api-Userinfo header.
+
+    Args:
+        request: FastAPI Request object containing headers
+
+    Returns:
+        str: User ID extracted from JWT claims
+
+    Raises:
+        HTTPException: 401 if userinfo header is missing or invalid
+    """
+    userinfo_header = request.headers.get("X-Apigateway-Api-Userinfo")
+    if not userinfo_header:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing authentication userinfo. Ensure requests go through API Gateway.",
+        )
+
+    try:
+        # Decode base64url encoded JWT payload
+        # Add padding if needed for proper base64 decoding
+        missing_padding = len(userinfo_header) % 4
+        if missing_padding:
+            userinfo_header += "=" * (4 - missing_padding)
+
+        decoded_bytes = base64.urlsafe_b64decode(userinfo_header)
+        claims = json.loads(decoded_bytes.decode("utf-8"))
+
+        user_id = claims.get("sub")
+        if not user_id:
+            raise HTTPException(
+                status_code=401, detail="User ID not found in authentication claims"
+            )
+        return user_id
+    except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
+        raise HTTPException(
+            status_code=401, detail=f"Invalid authentication userinfo format: {str(e)}"
+        )
 
 
 def make_job_id(
@@ -187,7 +231,7 @@ async def start_training(
         )
 
 
-@app.get("/jobs/{job_id}/download/gguf", response_model=DownloadUrlResponse)
+@app.get("/jobs/download/{job_id}", response_model=DownloadUrlResponse)
 async def download_gguf_file(
     job_id: str,
     current_user_id: str = Depends(get_current_user_id),
@@ -336,7 +380,7 @@ def delete_gcs_resources(
     return deleted_resources
 
 
-@app.delete("/jobs/{job_id}/delete", response_model=JobDeleteResponse)
+@app.delete("/jobs/{job_id}", response_model=JobDeleteResponse)
 async def delete_job(
     job_id: str,
     current_user_id: str = Depends(get_current_user_id),
@@ -385,7 +429,7 @@ async def delete_job(
         raise HTTPException(status_code=500, detail=f"Failed to delete job: {str(e)}")
 
 
-@app.get("/jobs/{job_id}/status", response_model=JobStatusResponse)
+@app.get("/jobs/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(
     job_id: str,
     current_user_id: str = Depends(get_current_user_id),

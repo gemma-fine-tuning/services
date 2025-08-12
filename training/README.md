@@ -84,7 +84,7 @@ List all jobs.
 }
 ```
 
-### GET `/jobs/{job_id}/status`
+### GET `/jobs/{job_id}`
 
 Get training job status.
 
@@ -109,7 +109,7 @@ Get training job status.
 }
 ```
 
-### GET `/jobs/{job_id}/download/gguf`
+### GET `/jobs/download/{job_id}`
 
 Get pre-signed URL from GCS to download GGUF file.
 
@@ -124,7 +124,7 @@ Get pre-signed URL from GCS to download GGUF file.
 }
 ```
 
-### DELETE `/jobs/{job_id}/delete`
+### DELETE `/jobs/{job_id}`
 
 Delete a training job and all associated files (at firestore and GCS).
 
