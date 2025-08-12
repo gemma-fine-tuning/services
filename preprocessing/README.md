@@ -24,7 +24,7 @@ gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
 
 ## Endpoints
 
-### POST `/upload`
+### POST `/datasets/upload`
 
 Upload a dataset file.
 
@@ -40,7 +40,7 @@ Upload a file using multipart/form-data. See API docs for details.
 }
 ```
 
-### POST `/process`
+### POST `/datasets/process`
 
 Start preprocessing job (supports text and vision datasets).
 
@@ -132,7 +132,7 @@ Get dataset information.
 
 > NOTE: Modality is returned when you fetch info for a dataset and it is determined by the service and saved to metadata during processing. It is not set by the user.
 
-### DELETE `/datasets/{processed_dataset_id}/delete`
+### DELETE `/datasets/{processed_dataset_id}`
 
 Delete a dataset and all associated files.
 

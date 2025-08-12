@@ -1,11 +1,12 @@
 import os
 import logging
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from storage import GCSStorageManager, LocalStorageManager
 from services.dataset_service import DatasetService
 from dataset_tracker import DatasetTracker
-from auth import initialize_firebase, get_current_user_id
+import base64
+import json
 from schema import (
     DatasetUploadResponse,
     PreprocessingRequest,
@@ -18,8 +19,6 @@ from schema import (
 project_id = os.getenv("PROJECT_ID")
 dataset_tracker = DatasetTracker(project_id)
 
-# Initialize Firebase
-initialize_firebase()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -55,15 +54,56 @@ dataset_service = DatasetService(storage_manager)
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "service": "preprocessing",
-        "version": "2.0.0",
-        "storage_type": storage_type,
-    }
+    return {"status": "healthy", "service": "preprocessing"}
 
 
-@app.post("/upload", response_model=DatasetUploadResponse)
+# Auth dependency for API Gateway
+def get_current_user_id(request: Request) -> str:
+    """
+    Extract user ID from X-Apigateway-Api-Userinfo header set by API Gateway.
+    The gateway requires the JWT to contain iss (issuer), sub (subject), aud (audience), iat (issued at), exp (expiration time) claims
+    API Gateway will send the authentication result in the X-Apigateway-Api-Userinfo to the backend API whcih contains the base64url encoded content of the JWT payload.
+    In this case, the gateway will override the original Authorization header with this X-Apigateway-Api-Userinfo header.
+
+    Args:
+        request: FastAPI Request object containing headers
+
+    Returns:
+        str: User ID extracted from JWT claims
+
+    Raises:
+        HTTPException: 401 if userinfo header is missing or invalid
+    """
+    userinfo_header = request.headers.get("X-Apigateway-Api-Userinfo")
+    if not userinfo_header:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing authentication userinfo. Ensure requests go through API Gateway.",
+        )
+
+    try:
+        # Decode base64url encoded JWT payload
+        # Add padding if needed for proper base64 decoding
+        missing_padding = len(userinfo_header) % 4
+        if missing_padding:
+            userinfo_header += "=" * (4 - missing_padding)
+
+        decoded_bytes = base64.urlsafe_b64decode(userinfo_header)
+        claims = json.loads(decoded_bytes.decode("utf-8"))
+
+        user_id = claims.get("sub")
+        if not user_id:
+            raise HTTPException(
+                status_code=401, detail="User ID not found in authentication claims"
+            )
+        return user_id
+    except (json.JSONDecodeError, base64.binascii.Error, UnicodeDecodeError) as e:
+        raise HTTPException(
+            status_code=401, detail=f"Invalid authentication userinfo format: {str(e)}"
+        )
+
+
+@app.post("/datasets/upload", response_model=DatasetUploadResponse)
 async def upload_dataset(
     file: UploadFile = File(...),
     current_user_id: str = Depends(get_current_user_id),
@@ -96,7 +136,7 @@ async def upload_dataset(
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 
-@app.post("/process", response_model=ProcessingResult)
+@app.post("/datasets/process", response_model=ProcessingResult)
 def process_dataset(
     request: PreprocessingRequest,
     current_user_id: str = Depends(get_current_user_id),
@@ -196,9 +236,7 @@ def get_dataset_info(
         )
 
 
-@app.delete(
-    "/datasets/{processed_dataset_id}/delete", response_model=DatasetDeleteResponse
-)
+@app.delete("/datasets/{processed_dataset_id}", response_model=DatasetDeleteResponse)
 def delete_dataset(
     processed_dataset_id: str,
     current_user_id: str = Depends(get_current_user_id),
