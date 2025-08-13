@@ -1,6 +1,8 @@
 # Preprocessing Service
 
-FastAPI service for preprocessing datasets for Gemma fine-tuning. Handles uploading, processing, and storing datasets in Google Cloud Storage or the local file system. Supports both text and vision (multimodal) ChatML format conversion.
+FastAPI service for preprocessing datasets for Gemma fine-tuning. Handles uploading, processing, and storing datasets in Google Cloud Storage or the local file system.
+
+> This service chooses to use conversational format with the ChatML variation. It covers multiple use cases by supporting different types.
 
 ## Structure
 
@@ -49,6 +51,10 @@ Start preprocessing job (supports text and vision datasets).
 ```json
 {
   "dataset_name": "your_dataset_name",
+  "dataset_source": "huggingface",
+  "dataset_id": "org/repo",
+  "dataset_subset": "default",
+  "processing_mode": "language_modeling" | "prompt_only",
   "config": {
     /* field mappings and options, see below */
   }
@@ -59,8 +65,9 @@ Start preprocessing job (supports text and vision datasets).
 
 ```json
 {
-  "status": "processing_started",
-  "processed_dataset": "your_dataset_name_processed"
+  "dataset_name": "your_dataset_name"
+  // OTHER METADATA FIELDS NOT USED BY THE FRONTEND
+  // the frontend redirects to the `/datasets/{processed_dataset_id}` endpoint directly
 }
 ```
 
@@ -98,15 +105,6 @@ Get dataset information.
         "num_rows": 1000,
         "path": "processed_datasets/your_dataset_name/train.parquet",
         "samples": [
-          // For text datasets:
-          {
-            "messages": [
-              { "role": "system", "content": "You are a helpful assistant." },
-              { "role": "user", "content": "What is machine learning?" },
-              { "role": "assistant", "content": "Machine learning is a field of AI..." }
-            ]
-          },
-          // ... up to 5 samples
           // For vision datasets:
           {
             "messages": [
@@ -122,6 +120,7 @@ Get dataset information.
               { "role": "assistant", "content": "The first image shows..." }
             ]
           }
+          // up to five samples per split...
         ]
       },
       // ... more splits (e.g., "test")
@@ -130,7 +129,9 @@ Get dataset information.
 }
 ```
 
-> NOTE: Modality is returned when you fetch info for a dataset and it is determined by the service and saved to metadata during processing. It is not set by the user.
+> NOTE: Modality is returned when you fetch info for a dataset and it is determined by the service and saved to metadata during processing. It is NOT set by the user.
+
+> Samples dict is structured according to the ChatML format and the specific type of the dataset (as well as modality). See the [Conversion Examples](#conversion-examples) section for details.
 
 ### DELETE `/datasets/{processed_dataset_id}`
 
@@ -156,19 +157,44 @@ Delete a dataset and all associated files.
 
 Health check endpoint.
 
-## Supported Formats
+## Conversion Examples
 
-- JSON, JSONL, CSV, Parquet, Excel files
-- HuggingFace datasets
-- **Vision datasets** with image columns (JPEG, PNG, BMP, GIF, TIFF, WebP)
+The only format used in this project is conversation format as opposed to standard format defined in TRL docs. The specific variation of this format used in ChatML. The reason is that this format supports both text-only and multimodal (vision) conversations.
 
-> **Note:** Uploading custom vision datasets is not currently supported, but you can use existing HuggingFace multimodal datasets.
+We have standardized to use list format (containing `type`) in `content` field for consistency between vision and text datasets, **even if the dataset is text-only**. The handler is backward compatible but this format is always preferred for consistency.
 
-## ChatML Format
+### Supported Formats & Modes
 
-Datasets are converted to the standardized ChatML format for conversational AI training. This format supports both text-only and multimodal (vision) conversations. We have standardized to use list format (containing "type") in `content` field for consistency between vision and text datasets.
+This service can ingest standard tabular formats (JSON, JSONL, CSV, Parquet, Excel) and HuggingFace datasets. It then preprocesses them into specific conversational formats tailored for different fine-tuning tasks. The desired output is controlled via a `processing_mode` parameter in the process request.
 
-### Text ChatML Example
+- **Language Modeling (`language_modeling`)**
+
+  - **Use Case**: Continued pre-training or domain adaptation using `SFTTrainer`.
+  - **Output Format**: The source text is mapped to the `assistant` role in a single-turn conversation. This presents the text as a valid completion for the model to learn from without a direct prompt.
+
+- **Prompt-Only (`prompt_only`)**
+  - **Use Case**: Policy optimization with trainers that require only a prompt, such as `GRPOTrainer`. The trainer uses the prompt to generate its own responses for optimization.
+  - **Output Format**: The source prompt is mapped to the `user` role in a single-turn conversation.
+
+Examples are shown below.
+
+Planned:
+
+- **Instruction Tuning (`prompt_completion`)**
+
+  - **Use Case**: Standard supervised fine-tuning with `SFTTrainer` to teach the model to follow instructions.
+  - **Source Data**: Two columns for `prompt` and `completion`.
+  - **Output Format**: A standard two-turn conversation.
+  - **Example**: `{"messages": [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]}`
+
+- **Preference Tuning (`preference`)**
+  - **Use Case**: Alignment with preference-based algorithms like DPO using `DPOTrainer`.
+  - **Source Data**: Three columns: `prompt`, `chosen` (the preferred response), and `rejected` (the less-preferred response).
+  - **Output Format**: This mode will produce a dataset with three distinct columns (`prompt`, `chosen`, `rejected`), as this specific structure is required by the `DPOTrainer`.
+
+### Language Modelling
+
+#### Text Example
 
 ```json
 {
@@ -194,12 +220,15 @@ Datasets are converted to the standardized ChatML format for conversational AI t
 }
 ```
 
-### Vision ChatML Example
+#### Vision Example
 
 ```json
 {
   "messages": [
-    { "role": "system", "content": "Describe the images." },
+    {
+      "role": "system",
+      "content": [{ "type": "text", "text": "Describe the images." }]
+    },
     {
       "role": "user",
       "content": [
@@ -208,14 +237,42 @@ Datasets are converted to the standardized ChatML format for conversational AI t
         { "type": "image", "image": "<base64 or image object>" }
       ]
     },
-    { "role": "assistant", "content": "The first image shows..." }
+    {
+      "role": "assistant",
+      "content": [{ "type": "text", "text": "The first image shows..." }]
+    }
   ]
 }
 ```
 
 > **Note:** Images are always included in the user message as a list of content items. See below for vision configuration.
 
-## Vision Configuration
+### Prompt-Only
+
+```json
+{
+  "prompt": [
+    {
+      "role": "system",
+      "content": [{ "type": "text", "content": "REASONING_PROMPT" }]
+    },
+    {
+      "role": "user",
+      "content": [
+        { "type": "text", "content": "What color is the sky?" },
+        { "type": "image", "image": "<base64 or image object>" }
+      ]
+    }
+  ],
+  "answer": "10",
+  "reasoning": "<think>Some math logic</think>",
+  "any_other_additional_fields": "additional_info"
+}
+```
+
+## Conversion Configuration
+
+### Language Modeling (Vision)
 
 Vision processing is automatically enabled when image field mappings are detected. Simply add image field mappings to your configuration (you can include multiple images in a single user message).
 
@@ -253,6 +310,40 @@ Vision processing is automatically enabled when image field mappings are detecte
 - Images are processed in the order they appear in the field_mappings
 - Supported image formats: PIL Image objects, base64 strings, file paths, HuggingFace dataset format with `bytes` field
 
+### Prompt-only (Text)
+
+```json
+{
+  "config": {
+    "vision_enabled": true,
+    "field_mappings": {
+      "system_field": {
+        "type": "template",
+        "value": "This is how you should reason... put stuff in this tag... put answer in..."
+      },
+      "user_field": {
+        "type": "template",
+        "value": "This is the user's prompt {prompt}."
+      },
+      "answer": {
+        "type": "column",
+        "value": "answer"
+      },
+      "reasoning": {
+        "type": "column",
+        "value": "reasoning"
+      },
+      "any_other_additional_fields": {
+        "type": "column",
+        "value": "additional_info"
+      }
+    }
+  }
+}
+```
+
+- `user_field` and `system_field` work the same way as in language modeling, but the `assistant_field` is not used.
+
 ## Metadata Management
 
 The preprocessing service uses a hybrid storage approach:
@@ -261,8 +352,3 @@ The preprocessing service uses a hybrid storage approach:
 - **Metadata**: Centrally managed in Firestore for consistency and user ownership tracking
 
 Each preprocessed dataset is identified by a unique 8-char UUID based identifier, this field is called `processed_dataset_id`. It is used as the ID for the document and firestore and the folder in GCS. This is different from `dataset_id` which refers to the ID of the **source** dataset, e.g. ID at hugging face or uploaded files.
-
-## Environment Variables
-
-- `GCS_DATA_BUCKET_NAME`: Google Cloud Storage bucket name (required for GCS storage)
-- See `.env.example` for more options
