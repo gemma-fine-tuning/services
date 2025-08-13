@@ -4,6 +4,7 @@ from typing import Dict, Any, List, Optional
 from datasets import DatasetDict
 import base64
 import io
+import json
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -626,8 +627,16 @@ class FormatConverter:
             return None
 
         system_config = field_mappings["system_field"]
-        system_message = ""
 
+        # Check for pre-formatted message first
+        if system_config["type"] == "column" and system_config["value"] in example:
+            content = example[system_config["value"]]
+            pre_formatted = self._extract_pre_formatted_message(content)
+            if pre_formatted:
+                return pre_formatted
+
+        # Handle regular content
+        system_message = ""
         if system_config["type"] == "column":
             if system_config["value"] in example:
                 system_message = str(example[system_config["value"]])
@@ -660,6 +669,24 @@ class FormatConverter:
         Returns:
             Optional[Dict]: User message dict or None if no content
         """
+        user_field_config = field_mappings.get("user_field")
+        if not user_field_config:
+            return None
+
+        # Check for pre-formatted message first
+        if (
+            user_field_config["type"] == "column"
+            and user_field_config["value"] in example
+        ):
+            content = example[user_field_config["value"]]
+            pre_formatted = self._extract_pre_formatted_message(content)
+            if pre_formatted:
+                # Add images to pre-formatted message if multimodal
+                if is_multimodal:
+                    self._add_images_to_message(pre_formatted, example, field_mappings)
+                return pre_formatted
+
+        # Handle regular content
         user_content = (
             self._extract_multimodal_content(example, field_mappings, "user")
             if is_multimodal
@@ -705,6 +732,21 @@ class FormatConverter:
         Returns:
             Optional[Dict]: Assistant message dict or None if no content
         """
+        assistant_field_config = field_mappings.get("assistant_field")
+        if not assistant_field_config:
+            return None
+
+        # Check for pre-formatted message first
+        if (
+            assistant_field_config["type"] == "column"
+            and assistant_field_config["value"] in example
+        ):
+            content = example[assistant_field_config["value"]]
+            pre_formatted = self._extract_pre_formatted_message(content)
+            if pre_formatted:
+                return pre_formatted
+
+        # Handle regular content
         assistant_content = self._extract_text_content(
             example, field_mappings, "assistant_field"
         )
@@ -714,6 +756,80 @@ class FormatConverter:
                 "content": [{"type": "text", "text": assistant_content}],
             }
         return None
+
+    def _extract_pre_formatted_message(self, content: Any) -> Optional[Dict]:
+        """
+        Extract and normalize pre-formatted message if content is already in ChatML format.
+
+        Checks if content is a pre-formatted message (dict with role/content or JSON string)
+        and returns it with normalized content format.
+
+        Args:
+            content: Content to check and potentially extract
+
+        Returns:
+            Optional[Dict]: Pre-formatted message dict with normalized content or None if not pre-formatted
+        """
+        pre_formatted_msg = None
+
+        # Check if it's already a dict with role/content
+        if isinstance(content, dict) and "role" in content and "content" in content:
+            pre_formatted_msg = content
+
+        # Check if it's a JSON string that represents a message
+        elif isinstance(content, str):
+            # Simple regex to check if it looks like a JSON object with role and content
+            pattern = r'^\s*\{.*"role".*"content".*\}\s*$'
+            if re.search(pattern, content, re.DOTALL):
+                try:
+                    parsed = json.loads(content)
+                    if (
+                        isinstance(parsed, dict)
+                        and "role" in parsed
+                        and "content" in parsed
+                    ):
+                        pre_formatted_msg = parsed
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+        # If we found a pre-formatted message, normalize its content to ChatML list format
+        if pre_formatted_msg:
+            # Normalize content to always be a list (ChatML format)
+            if isinstance(pre_formatted_msg.get("content"), str):
+                pre_formatted_msg["content"] = [
+                    {"type": "text", "text": pre_formatted_msg["content"]}
+                ]
+            elif not isinstance(pre_formatted_msg.get("content"), list):
+                pre_formatted_msg["content"] = [
+                    {"type": "text", "text": str(pre_formatted_msg.get("content", ""))}
+                ]
+
+            return pre_formatted_msg
+
+        return None
+
+    def _add_images_to_message(
+        self, message: Dict, example: Dict, field_mappings: Dict
+    ) -> None:
+        """
+        Add images to a message's content list.
+
+        Args:
+            message: Message dict to add images to
+            example: The input example
+            field_mappings: Field mappings configuration
+        """
+        for _, field_config in field_mappings.items():
+            if field_config.get("type") == "image":
+                image_column = field_config.get("value")
+                if image_column and image_column in example:
+                    image_data = example[image_column]
+                    if image_data is not None:
+                        processed_image = self._process_image_field(image_data)
+                        if processed_image:
+                            message["content"].append(
+                                {"type": "image", "image": processed_image}
+                            )
 
     def _validate_messages(self, messages: List[Dict]) -> bool:
         """

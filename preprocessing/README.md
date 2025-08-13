@@ -2,7 +2,10 @@
 
 FastAPI service for preprocessing datasets for Gemma fine-tuning. Handles uploading, processing, and storing datasets in Google Cloud Storage or the local file system.
 
+> [!NOTE]
 > This service chooses to use conversational format with the ChatML variation. It covers multiple use cases by supporting different types.
+> [!CAUTION]
+> This service is not responsible for applying chat template and tokenizing / applying processors. This is a huge difference with some documentation that you will see on TRL, HF, or Unsloth. We have a specialized vision collator to do these **during training** (because it is meaningless to save these tokens in the dataset).
 
 ## Structure
 
@@ -260,6 +263,8 @@ Planned:
       "role": "user",
       "content": [
         { "type": "text", "content": "What color is the sky?" },
+        // This differs to some documentation because we extract this image
+        // and apply processor during training not during preprocessing
         { "type": "image", "image": "<base64 or image object>" }
       ]
     }
@@ -272,7 +277,7 @@ Planned:
 
 ## Conversion Configuration
 
-### Language Modeling (Vision)
+### Language Modeling
 
 Vision processing is automatically enabled when image field mappings are detected. Simply add image field mappings to your configuration (you can include multiple images in a single user message).
 
@@ -310,7 +315,7 @@ Vision processing is automatically enabled when image field mappings are detecte
 - Images are processed in the order they appear in the field_mappings
 - Supported image formats: PIL Image objects, base64 strings, file paths, HuggingFace dataset format with `bytes` field
 
-### Prompt-only (Text)
+### Prompt-only
 
 ```json
 {
@@ -324,6 +329,10 @@ Vision processing is automatically enabled when image field mappings are detecte
       "user_field": {
         "type": "template",
         "value": "This is the user's prompt {prompt}."
+      },
+      "image_to_add_to_user": {
+        "type": "image",
+        "value": "image"
       },
       "answer": {
         "type": "column",
@@ -343,6 +352,7 @@ Vision processing is automatically enabled when image field mappings are detecte
 ```
 
 - `user_field` and `system_field` work the same way as in language modeling, but the `assistant_field` is not used.
+- Unlike language modeling, current research indicates that ONLY ONE image is allowed, but the conversion works the same
 
 ## Metadata Management
 
