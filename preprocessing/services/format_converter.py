@@ -11,20 +11,36 @@ logger = logging.getLogger(__name__)
 
 class FormatConverter:
     """
-    A class that handles conversion of datasets to ChatML format.
+    A class that handles conversion of datasets to various conversational formats.
 
-    This class provides functionality to convert various dataset formats into the
-    ChatML format, which is a standardized format for conversational AI training data.
-    It supports conversion from multiple input formats and includes validation.
+    This class provides functionality to convert various dataset formats into
+    standardized formats for conversational AI training data, including ChatML
+    format for language modeling and specialized formats for prompt-only training.
+
+    Supports two main processing modes:
+    - LANGUAGE_MODELING: Converts to ChatML format with messages field
+    - PROMPT_ONLY: Converts to prompt-only format with prompt, answer, reasoning fields
 
     The ChatML format follows this structure:
     ```json
     {
         "messages": [
-            {"role": "system", "content": "System message"},
-            {"role": "user", "content": "User message"},
-            {"role": "assistant", "content": "Assistant response"}
+            {"role": "system", "content": [{"type": "text", "text": "System message"}]},
+            {"role": "user", "content": [{"type": "text", "text": "User message"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Assistant response"}]}
         ]
+    }
+    ```
+
+    The prompt-only format follows this structure:
+    ```json
+    {
+        "prompt": [
+            {"role": "system", "content": [{"type": "text", "text": "System message"}]},
+            {"role": "user", "content": [{"type": "text", "text": "User prompt"}]}
+        ],
+        "answer": "Expected answer",
+        "reasoning": "Optional reasoning"
     }
     ```
 
@@ -33,7 +49,7 @@ class FormatConverter:
 
     Example:
         >>> converter = FormatConverter()
-        >>> chatml_data = converter.convert_to_chatml(dataset, config)
+        >>> data = converter.convert_to_conversational_chatml(dataset, "language_modeling", config)
     """
 
     def __init__(self):
@@ -42,7 +58,42 @@ class FormatConverter:
         """
         self.whitespace_pattern = re.compile(r"\s+")
 
-    def convert_to_chatml(
+    def convert_to_conversational_chatml(
+        self, dataset: DatasetDict, processing_mode: str, config: Dict[str, Any]
+    ) -> DatasetDict:
+        """
+        Convert a dataset to conversational format based on the processing mode.
+
+        This is the main conversion method that handles different processing modes:
+        - language_modeling: Converts to ChatML format with messages field
+        - prompt_only: Converts to prompt-only format with prompt, answer, reasoning fields
+
+        Args:
+            dataset (DatasetDict): The input dataset with splits to convert
+            processing_mode (str): The processing mode ("language_modeling" or "prompt_only")
+            config (Dict[str, Any]): Configuration for the conversion, including field_mappings
+
+        Returns:
+            DatasetDict: Converted dataset in the appropriate format
+
+        Raises:
+            ValueError: If processing_mode is not supported
+            Exception: If there's an error during conversion
+        """
+        try:
+            if processing_mode == "language_modeling":
+                return self._convert_to_language_modeling(dataset, config)
+            elif processing_mode == "prompt_only":
+                return self._convert_to_prompt_only(dataset, config)
+            else:
+                raise ValueError(f"Unsupported processing mode: {processing_mode}")
+        except Exception as e:
+            logger.error(
+                f"Error converting dataset with mode {processing_mode}: {str(e)}"
+            )
+            raise
+
+    def _convert_to_language_modeling(
         self, dataset: DatasetDict, config: Dict[str, Any]
     ) -> DatasetDict:
         """
@@ -134,6 +185,71 @@ class FormatConverter:
             logger.error(f"Error converting to ChatML format: {str(e)}")
             raise
 
+    def _convert_to_prompt_only(
+        self, dataset: DatasetDict, config: Dict[str, Any]
+    ) -> DatasetDict:
+        """
+        Convert dataset to prompt-only format for policy optimization training.
+
+        This format is used by trainers like GRPOTrainer that only need prompts
+        to generate their own responses for optimization.
+
+        Args:
+            dataset (DatasetDict): Input dataset
+            config (Dict[str, Any]): Configuration including field_mappings
+
+        Returns:
+            DatasetDict: Dataset in prompt-only format with prompt, answer, reasoning fields
+        """
+        try:
+            if not dataset:
+                raise ValueError("Dataset is empty")
+
+            # Validate field mappings refer to real columns
+            field_mappings = config.get("field_mappings", {})
+            first_split = dataset[next(iter(dataset))]
+            available_columns = set(first_split.column_names)
+
+            for field_key, field_config in field_mappings.items():
+                if field_config.get("type") in ("column", "image"):
+                    column_name = field_config.get("value")
+                    if column_name not in available_columns:
+                        raise ValueError(
+                            f"Field mapping '{field_key}' refers to column '{column_name}' "
+                            f"which does not exist in dataset. Available columns: {sorted(available_columns)}"
+                        )
+
+            # Check if we have any image fields in the configuration
+            has_image_fields = self._has_image_fields(field_mappings)
+            logger.info(f"Has image fields: {has_image_fields}")
+
+            transformed_dataset = dataset.map(
+                self._convert_single_example_prompt_only,
+                fn_kwargs={
+                    "field_mappings": field_mappings,
+                    "is_multimodal": has_image_fields,
+                },
+                batched=False,
+                remove_columns=dataset[next(iter(dataset))].column_names,
+            )
+
+            # Filter out failed conversions (empty dictionaries)
+            transformed_dataset = transformed_dataset.filter(
+                lambda x: isinstance(x, dict) and "prompt" in x and len(x["prompt"]) > 0
+            )
+
+            logger.info(f"Converted dataset splits: {list(transformed_dataset.keys())}")
+            for split_name, split_data in transformed_dataset.items():
+                logger.info(
+                    f"Converted split {split_name} has {len(split_data)} examples"
+                )
+
+            return transformed_dataset
+
+        except Exception as e:
+            logger.error(f"Error converting to prompt-only format: {str(e)}")
+            raise
+
     def _convert_single_example(
         self,
         example: Dict,
@@ -193,11 +309,76 @@ class FormatConverter:
             logger.error(f"Field mappings: {field_mappings}")
             return {"messages": []}
 
-    def _extract_text_content(
+    def _convert_single_example_prompt_only(
         self,
         example: Dict,
-        field_mappings: Dict,
-        role: str,
+        field_mappings: Dict[str, Dict[str, Any]],
+        is_multimodal: bool = False,
+    ) -> Dict:
+        """
+        Convert a single example to prompt-only format.
+
+        This method converts one example from the input format to prompt-only format,
+        which includes a prompt field (list of messages) and additional fields like
+        answer and reasoning that are used by the reward function but ignored by
+        the trainer (e.g., GRPOTrainer).
+
+        Args:
+            example (Dict): The input example to convert
+            field_mappings (Dict): Maps input fields with type and value:
+                - system_field: System message (optional)
+                - user_field: The main prompt content
+                - Any other fields: Additional data fields like answer, reasoning, etc. (optional)
+                - image fields: Images to include in user message (optional)
+
+        Returns:
+            Dict: The converted example in prompt-only format with prompt, and additional fields,
+                  or empty dict if conversion fails
+        """
+        try:
+            prompt_messages: List[Dict[str, Any]] = []
+            result = {}
+
+            # System message for the prompt
+            sys_msg = self._create_system_message(example, field_mappings)
+            if sys_msg:
+                prompt_messages.append(sys_msg)
+
+            # User message (contains the actual prompt + images if multimodal)
+            user_msg = self._create_user_message(
+                example, field_mappings, is_multimodal=is_multimodal
+            )
+            if user_msg:
+                prompt_messages.append(user_msg)
+
+            # The prompt field is required
+            if prompt_messages:
+                result["prompt"] = prompt_messages
+            else:
+                logger.warning("No prompt content found in example")
+                return {}
+
+            # Extract additional fields (answer, reasoning, etc.) that are used by reward function
+            # Accept any field that is not a special field and is either column or template type
+            special_fields = {"system_field", "user_field"}
+            for field_key in field_mappings.keys():
+                if field_key not in special_fields:
+                    result[field_key] = self._extract_text_content(
+                        example, field_mappings, field_key
+                    )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to convert single example to prompt-only: {e}")
+            logger.error(
+                f"Example keys: {list(example.keys()) if isinstance(example, dict) else 'Not a dict'}"
+            )
+            logger.error(f"Field mappings: {field_mappings}")
+            return {}
+
+    def _extract_text_content(
+        self, example: Dict, field_mappings: Dict, field_key: str
     ) -> str:
         """
         Extract and format text content for a specific role from the example.
@@ -219,9 +400,9 @@ class FormatConverter:
             >>> field_mappings = {
             ...     "user_field": {"type": "column", "value": "question"}
             ... }
-            >>> content = converter._extract_text_content(example, field_mappings, "user")
+            >>> content = converter._extract_text_content(example, field_mappings, "user_field")
         """
-        field_config = field_mappings.get(f"{role}_field")
+        field_config = field_mappings.get(field_key)
         if not field_config:
             return ""
 
@@ -229,13 +410,17 @@ class FormatConverter:
             if field_config["value"] not in example:
                 return ""
             content = example[field_config["value"]]
-        else:  # template
+        elif field_config["type"] == "template":
             try:
                 template_vars = {key: str(value) for key, value in example.items()}
                 content = field_config["value"].format(**template_vars)
             except (KeyError, ValueError) as e:
                 logger.warning(f"Template formatting failed: {e}, using raw template")
                 content = field_config["value"]
+        else:
+            raise ValueError(
+                f"Unsupported field type '{field_config['type']}' for key '{field_key}'"
+            )
 
         if isinstance(content, str):
             content = self.whitespace_pattern.sub(" ", content).strip()
@@ -287,7 +472,9 @@ class FormatConverter:
         content_items = []
 
         # Extract text content using the existing method
-        text_content = self._extract_text_content(example, field_mappings, role)
+        text_content = self._extract_text_content(
+            example, field_mappings, f"{role}_field"
+        )
         if text_content:
             content_items.append({"type": "text", "text": text_content})
 
@@ -479,7 +666,9 @@ class FormatConverter:
             else [
                 {
                     "type": "text",
-                    "text": self._extract_text_content(example, field_mappings, "user"),
+                    "text": self._extract_text_content(
+                        example, field_mappings, "user_field"
+                    ),
                 }
             ]
         )
@@ -517,7 +706,7 @@ class FormatConverter:
             Optional[Dict]: Assistant message dict or None if no content
         """
         assistant_content = self._extract_text_content(
-            example, field_mappings, "assistant"
+            example, field_mappings, "assistant_field"
         )
         if assistant_content:
             return {

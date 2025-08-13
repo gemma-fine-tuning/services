@@ -1,5 +1,15 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from typing import Optional, Dict, List, Any, Literal
+from enum import Enum
+
+
+class ProcessingMode(str, Enum):
+    """
+    Specifies the preprocessing mode to format the dataset for a specific fine-tuning task.
+    """
+
+    LANGUAGE_MODELING = "language_modeling"
+    PROMPT_ONLY = "prompt_only"
 
 
 class DatasetUploadResponse(BaseModel):
@@ -68,7 +78,23 @@ class PreprocessingRequest(BaseModel):
     dataset_source: Literal["upload", "huggingface"]
     dataset_id: str
     dataset_subset: str = "default"
+    processing_mode: ProcessingMode
     config: PreprocessingConfig
+
+    @model_validator(mode="after")
+    def validate_field_mappings(self) -> "PreprocessingRequest":
+        if self.processing_mode == ProcessingMode.LANGUAGE_MODELING:
+            required_fields = ["user_field", "assistant_field"]
+        elif self.processing_mode == ProcessingMode.PROMPT_ONLY:
+            required_fields = ["system_field", "user_field"]
+
+        for field in required_fields:
+            if field not in self.config.field_mappings:
+                raise ValueError(
+                    f"'{field}' is required in field_mappings for {self.processing_mode} mode."
+                )
+
+        return self
 
 
 class DatasetInfoSample(BaseModel):
