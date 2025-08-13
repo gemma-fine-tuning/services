@@ -21,8 +21,9 @@ class FormatConverter:
     Supports two main processing modes:
     - LANGUAGE_MODELING: Converts to ChatML format with messages field
     - PROMPT_ONLY: Converts to prompt-only format with prompt, answer, reasoning fields
+    - PREFERENCE: Converts to preference format with prompt, chosen, and rejected fields
 
-    The ChatML format follows this structure:
+    The language modelling type follows this structure:
     ```json
     {
         "messages": [
@@ -33,7 +34,7 @@ class FormatConverter:
     }
     ```
 
-    The prompt-only format follows this structure:
+    The prompt-only type follows this structure:
     ```json
     {
         "prompt": [
@@ -145,14 +146,7 @@ class FormatConverter:
             first_split = dataset[next(iter(dataset))]
             available_columns = set(first_split.column_names)
 
-            for field_key, field_config in field_mappings.items():
-                if field_config.get("type") in ("column", "image"):
-                    column_name = field_config.get("value")
-                    if column_name not in available_columns:
-                        raise ValueError(
-                            f"Field mapping '{field_key}' refers to column '{column_name}' "
-                            f"which does not exist in dataset. Available columns: {sorted(available_columns)}"
-                        )
+            self._validate_field_mappings(field_mappings, available_columns)
 
             # Check if we have any image fields in the configuration
             has_image_fields = self._has_image_fields(field_mappings)
@@ -211,14 +205,7 @@ class FormatConverter:
             first_split = dataset[next(iter(dataset))]
             available_columns = set(first_split.column_names)
 
-            for field_key, field_config in field_mappings.items():
-                if field_config.get("type") in ("column", "image"):
-                    column_name = field_config.get("value")
-                    if column_name not in available_columns:
-                        raise ValueError(
-                            f"Field mapping '{field_key}' refers to column '{column_name}' "
-                            f"which does not exist in dataset. Available columns: {sorted(available_columns)}"
-                        )
+            self._validate_field_mappings(field_mappings, available_columns)
 
             # Check if we have any image fields in the configuration
             has_image_fields = self._has_image_fields(field_mappings)
@@ -595,20 +582,26 @@ class FormatConverter:
 
         return False
 
-    def _has_image_fields(self, field_mappings: Dict[str, Dict[str, Any]]) -> bool:
+    def _has_image_fields(self, field_mappings: Dict[str, Any]) -> bool:
         """
-        Check if field mappings contain any image fields.
+        Check if field mappings contain any image fields within user_field.
 
         Args:
             field_mappings: Dictionary of field mappings
 
         Returns:
-            bool: True if any field has type="image"
+            bool: True if user_field contains any image types
         """
-        return any(
-            field_config.get("type") == "image"
-            for field_config in field_mappings.values()
-        )
+        user_field = field_mappings.get("user_field")
+        if not user_field:
+            return False
+
+        # Handle new format: List[Dict]
+        if isinstance(user_field, list):
+            return any(item.get("type") == "image" for item in user_field)
+
+        # Handle backward compatibility: single Dict
+        return user_field.get("type") == "image"
 
     def _create_system_message(
         self, example: Dict, field_mappings: Dict
@@ -661,6 +654,8 @@ class FormatConverter:
         """
         Create a user message from the example data.
 
+        Supports both new format (List[Dict] with mixed content) and backward compatibility (single Dict).
+
         Args:
             example (Dict): The input example
             field_mappings (Dict): Field mappings configuration
@@ -673,51 +668,113 @@ class FormatConverter:
         if not user_field_config:
             return None
 
-        # Check for pre-formatted message first
-        if (
-            user_field_config["type"] == "column"
-            and user_field_config["value"] in example
-        ):
-            content = example[user_field_config["value"]]
-            pre_formatted = self._extract_pre_formatted_message(content)
-            if pre_formatted:
-                # Add images to pre-formatted message if multimodal
-                if is_multimodal:
-                    self._add_images_to_message(pre_formatted, example, field_mappings)
-                return pre_formatted
+        # Handle new format: List[Dict] with mixed content (text and images)
+        if isinstance(user_field_config, list):
+            content_items = []
 
-        # Handle regular content
-        user_content = (
-            self._extract_multimodal_content(example, field_mappings, "user")
-            if is_multimodal
-            else [
-                {
-                    "type": "text",
-                    "text": self._extract_text_content(
-                        example, field_mappings, "user_field"
-                    ),
-                }
-            ]
-        )
+            for item in user_field_config:
+                if item.get("type") == "template":
+                    # Handle template
+                    try:
+                        template_vars = {
+                            key: str(value) for key, value in example.items()
+                        }
+                        text = item["value"].format(**template_vars)
+                        text = self.whitespace_pattern.sub(" ", text).strip()
+                        if text:
+                            content_items.append({"type": "text", "text": text})
+                    except (KeyError, ValueError) as e:
+                        logger.warning(f"Template formatting failed: {e}")
 
-        # Filter out empty text content
-        if is_multimodal:
-            user_content = [
+                elif item.get("type") == "column":
+                    # Handle column reference
+                    column_name = item.get("value")
+                    if column_name and column_name in example:
+                        content = example[column_name]
+
+                        # Check if it's pre-formatted
+                        pre_formatted = self._extract_pre_formatted_message(content)
+                        if pre_formatted:
+                            # Extract content from pre-formatted message
+                            if isinstance(pre_formatted.get("content"), list):
+                                content_items.extend(pre_formatted["content"])
+                            else:
+                                text = str(pre_formatted.get("content", ""))
+                                if text.strip():
+                                    content_items.append({"type": "text", "text": text})
+                        else:
+                            # Regular string content
+                            text = str(content)
+                            text = self.whitespace_pattern.sub(" ", text).strip()
+                            if text:
+                                content_items.append({"type": "text", "text": text})
+
+                elif item.get("type") == "image":
+                    # Handle image
+                    image_column = item.get("value")
+                    if image_column and image_column in example:
+                        image_data = example[image_column]
+                        if image_data is not None:
+                            processed_image = self._process_image_field(image_data)
+                            if processed_image:
+                                content_items.append(
+                                    {"type": "image", "image": processed_image}
+                                )
+
+            # Filter out empty content and return
+            content_items = [
                 item
-                for item in user_content
+                for item in content_items
                 if (item.get("text") and item.get("text").strip()) or item.get("image")
             ]
+
+            if content_items:
+                return {"role": "user", "content": content_items}
+            return None
+
+        # Handle backward compatibility: single Dict
         else:
-            user_content = [
-                item
-                for item in user_content
-                if item.get("text") and item.get("text").strip()
-            ]
+            # Check for pre-formatted message first
+            if (
+                user_field_config.get("type") == "column"
+                and user_field_config["value"] in example
+            ):
+                content = example[user_field_config["value"]]
+                pre_formatted = self._extract_pre_formatted_message(content)
+                if pre_formatted:
+                    return pre_formatted
 
-        if user_content:
-            return {"role": "user", "content": user_content}
+            # Handle regular content using existing logic
+            if is_multimodal:
+                user_content = self._extract_multimodal_content(
+                    example, field_mappings, "user"
+                )
+            else:
+                text_content = self._extract_text_content(
+                    example, field_mappings, "user_field"
+                )
+                user_content = (
+                    [{"type": "text", "text": text_content}] if text_content else []
+                )
 
-        return None
+            # Filter out empty text content
+            if is_multimodal:
+                user_content = [
+                    item
+                    for item in user_content
+                    if (item.get("text") and item.get("text").strip())
+                    or item.get("image")
+                ]
+            else:
+                user_content = [
+                    item
+                    for item in user_content
+                    if item.get("text") and item.get("text").strip()
+                ]
+
+            if user_content:
+                return {"role": "user", "content": user_content}
+            return None
 
     def _create_assistant_message(
         self, example: Dict, field_mappings: Dict
@@ -808,28 +865,72 @@ class FormatConverter:
 
         return None
 
-    def _add_images_to_message(
-        self, message: Dict, example: Dict, field_mappings: Dict
+    def _validate_field_mappings(
+        self, field_mappings: Dict, available_columns: set
     ) -> None:
         """
-        Add images to a message's content list.
+        Validate field mappings against available columns and new structure rules.
+        NOTE: This is different from the model_validate on the schema for config because this checks the content, the former checks the structure
 
         Args:
-            message: Message dict to add images to
-            example: The input example
             field_mappings: Field mappings configuration
+            available_columns: Set of available column names in the dataset
+
+        Raises:
+            ValueError: If validation fails
         """
-        for _, field_config in field_mappings.items():
-            if field_config.get("type") == "image":
-                image_column = field_config.get("value")
-                if image_column and image_column in example:
-                    image_data = example[image_column]
-                    if image_data is not None:
-                        processed_image = self._process_image_field(image_data)
-                        if processed_image:
-                            message["content"].append(
-                                {"type": "image", "image": processed_image}
+        for field_key, field_config in field_mappings.items():
+            # Handle the new user_field structure (can be List[Dict] or Dict)
+            if field_key == "user_field":
+                if isinstance(field_config, list):
+                    # New format: List[Dict] with mixed content
+                    for item in field_config:
+                        if not isinstance(item, dict):
+                            raise ValueError(
+                                f"user_field list items must be dictionaries, got {type(item)}"
                             )
+                        self._validate_single_field_config(
+                            item, available_columns, field_key
+                        )
+                else:
+                    # Backward compatibility: single Dict
+                    self._validate_single_field_config(
+                        field_config, available_columns, field_key
+                    )
+            else:
+                # All other fields must be single Dict and cannot have type="image"
+                if isinstance(field_config, list):
+                    raise ValueError(
+                        f"Field '{field_key}' cannot be a list. Only user_field supports list format."
+                    )
+
+                if field_config.get("type") == "image":
+                    raise ValueError(
+                        f"Image fields are only allowed within user_field. Found image field: '{field_key}'"
+                    )
+
+                self._validate_single_field_config(
+                    field_config, available_columns, field_key
+                )
+
+    def _validate_single_field_config(
+        self, field_config: Dict, available_columns: set, field_key: str
+    ) -> None:
+        """
+        Validate a single field configuration.
+
+        Args:
+            field_config: Single field configuration dict
+            available_columns: Set of available column names
+            field_key: Name of the field being validated
+        """
+        if field_config.get("type") in ("column", "image"):
+            column_name = field_config.get("value")
+            if column_name not in available_columns:
+                raise ValueError(
+                    f"Field mapping '{field_key}' refers to column '{column_name}' "
+                    f"which does not exist in dataset. Available columns: {sorted(available_columns)}"
+                )
 
     def _validate_messages(self, messages: List[Dict]) -> bool:
         """

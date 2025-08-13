@@ -1,5 +1,5 @@
 from pydantic import BaseModel, model_validator
-from typing import Optional, Dict, List, Any, Literal
+from typing import Optional, Dict, List, Any, Literal, Union
 from enum import Enum
 
 
@@ -67,7 +67,7 @@ class AugmentationSetupConfig(BaseModel):
 
 
 class PreprocessingConfig(BaseModel):
-    field_mappings: Dict[str, FieldMappingConfig] = {}
+    field_mappings: Dict[str, Union[FieldMappingConfig, List[FieldMappingConfig]]] = {}
     normalize_whitespace: bool = True
     augmentation_config: Optional[AugmentationSetupConfig] = None
     split_config: Optional[HFSplitConfig | ManualSplitConfig | NoSplitConfig] = None
@@ -93,6 +93,22 @@ class PreprocessingRequest(BaseModel):
                 raise ValueError(
                     f"'{field}' is required in field_mappings for {self.processing_mode} mode."
                 )
+
+        # Validate that image fields only appear within user_field
+        for field_name, field_config in self.config.field_mappings.items():
+            if field_name != "user_field":
+                # non-user fields can only be single config and non-image type
+                if isinstance(field_config, list):
+                    raise ValueError(
+                        f"Field '{field_name}' cannot be a list. Only 'user_field' supports list format."
+                    )
+                elif (
+                    isinstance(field_config, dict)
+                    and field_config.get("type") == "image"
+                ):
+                    raise ValueError(
+                        f"Image fields are only allowed within 'user_field', not in '{field_name}'"
+                    )
 
         return self
 
