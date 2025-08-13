@@ -170,60 +170,15 @@ We have standardized to use list format (containing `type`) in `content` field f
 
 This service can ingest standard tabular formats (JSON, JSONL, CSV, Parquet, Excel) and HuggingFace datasets. It then preprocesses them into specific conversational formats tailored for different fine-tuning tasks. The desired output is controlled via a `processing_mode` parameter in the process request.
 
-- **Language Modeling (`language_modeling`)**
+- Language modeling: `system`, `user`, `assistant` roles in a single-turn conversation for `SFTTrainer`
 
-  - **Use Case**: Continued pre-training or domain adaptation using `SFTTrainer`.
-  - **Output Format**: The source text is mapped to the `assistant` role in a single-turn conversation. This presents the text as a valid completion for the model to learn from without a direct prompt.
+- Prompt-only: `user` role with a prompt, used for policy optimization with trainers like `GRPOTrainer`
 
-- **Prompt-Only (`prompt_only`)**
-  - **Use Case**: Policy optimization with trainers that require only a prompt, such as `GRPOTrainer`. The trainer uses the prompt to generate its own responses for optimization.
-  - **Output Format**: The source prompt is mapped to the `user` role in a single-turn conversation.
+- Preference tuning: `user`, `chosen`, `rejected` roles for preference-based algorithms like `DPOTrainer`
 
-Examples are shown below.
+> We don't currently support implicitly prompt in preferences which is recommended for Reward Modelling, will do that soon!
 
-Planned:
-
-- **Instruction Tuning (`prompt_completion`)**
-
-  - **Use Case**: Standard supervised fine-tuning with `SFTTrainer` to teach the model to follow instructions.
-  - **Source Data**: Two columns for `prompt` and `completion`.
-  - **Output Format**: A standard two-turn conversation.
-  - **Example**: `{"messages": [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]}`
-
-- **Preference Tuning (`preference`)**
-  - **Use Case**: Alignment with preference-based algorithms like DPO using `DPOTrainer`.
-  - **Source Data**: Three columns: `prompt`, `chosen` (the preferred response), and `rejected` (the less-preferred response).
-  - **Output Format**: This mode will produce a dataset with three distinct columns (`prompt`, `chosen`, `rejected`), as this specific structure is required by the `DPOTrainer`.
-
-### Language Modelling
-
-#### Text Example
-
-```json
-{
-  "messages": [
-    {
-      "role": "system",
-      "content": [{ "type": "text", "text": "You are a helpful assistant." }]
-    },
-    {
-      "role": "user",
-      "content": [{ "type": "text", "text": "What is deep learning?" }]
-    },
-    {
-      "role": "assistant",
-      "content": [
-        {
-          "type": "text",
-          "text": "Deep learning is a subset of machine learning..."
-        }
-      ]
-    }
-  ]
-}
-```
-
-#### Vision Example
+### Language Modeling
 
 ```json
 {
@@ -250,7 +205,7 @@ Planned:
 
 > **Note:** Images are always included in the user message as a list of content items. See below for vision configuration.
 
-### Prompt-Only
+### Prompt-only
 
 ```json
 {
@@ -275,6 +230,34 @@ Planned:
 }
 ```
 
+### Preference
+
+```json
+{
+  "prompt": [
+    {
+      "role": "user",
+      "content": [
+        { "type": "text", "content": "What color is the sky?" },
+        { "type": "image", "image": "<base64 or image object>" }
+      ]
+    }
+  ],
+  "chosen": [
+    {
+      "role": "assistant",
+      "content": [{ "type": "text", "content": "It is blue." }]
+    }
+  ],
+  "rejected": [
+    {
+      "role": "assistant",
+      "content": [{ "type": "text", "content": "It is green." }]
+    }
+  ]
+}
+```
+
 ## Conversion Configuration
 
 ### Language Modeling
@@ -286,25 +269,24 @@ Vision processing is automatically enabled when image field mappings are detecte
   "config": {
     "vision_enabled": true,
     "field_mappings": {
-      "user_field": {
-        "type": "template",
-        "value": "Compare these images and tell me the differences."
-      },
+      // user_field is either List[Dict] or just Dict
+      "user_field": [
+        {
+          "type": "template",
+          "value": "Compare these images and tell me the differences."
+        },
+        {
+          "type": "image",
+          "value": "image1"
+        },
+        {
+          "type": "image",
+          "value": "image2"
+        }
+      ],
       "assistant_field": {
         "type": "column",
         "value": "comparison"
-      },
-      "image_field_1": {
-        "type": "image",
-        "value": "image1"
-      },
-      "image_field_2": {
-        "type": "image",
-        "value": "image2"
-      },
-      "image_field_3": {
-        "type": "image",
-        "value": "image3"
       }
     }
   }
@@ -326,14 +308,17 @@ Vision processing is automatically enabled when image field mappings are detecte
         "type": "template",
         "value": "This is how you should reason... put stuff in this tag... put answer in..."
       },
-      "user_field": {
-        "type": "template",
-        "value": "This is the user's prompt {prompt}."
-      },
-      "image_to_add_to_user": {
-        "type": "image",
-        "value": "image"
-      },
+      "user_field": [
+        {
+          "type": "template",
+          "value": "What color is the sky?"
+        },
+        {
+          "type": "image",
+          "value": "image1"
+        }
+      ],
+      // these additional fields are TEXT-ONLY-FIELDS!
       "answer": {
         "type": "column",
         "value": "answer"
@@ -345,6 +330,36 @@ Vision processing is automatically enabled when image field mappings are detecte
       "any_other_additional_fields": {
         "type": "column",
         "value": "additional_info"
+      }
+    }
+  }
+}
+```
+
+### Preference
+
+```json
+{
+  "config": {
+    "vision_enabled": true,
+    "field_mappings": {
+      "user_field": [
+        {
+          "type": "template",
+          "value": "What color is the sky?"
+        },
+        {
+          "type": "image",
+          "value": "image1"
+        }
+      ],
+      "chosen_field": {
+        "type": "column",
+        "value": "chosen"
+      },
+      "rejected_field": {
+        "type": "column",
+        "value": "rejected"
       }
     }
   }

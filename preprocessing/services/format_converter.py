@@ -23,29 +23,6 @@ class FormatConverter:
     - PROMPT_ONLY: Converts to prompt-only format with prompt, answer, reasoning fields
     - PREFERENCE: Converts to preference format with prompt, chosen, and rejected fields
 
-    The language modelling type follows this structure:
-    ```json
-    {
-        "messages": [
-            {"role": "system", "content": [{"type": "text", "text": "System message"}]},
-            {"role": "user", "content": [{"type": "text", "text": "User message"}]},
-            {"role": "assistant", "content": [{"type": "text", "text": "Assistant response"}]}
-        ]
-    }
-    ```
-
-    The prompt-only type follows this structure:
-    ```json
-    {
-        "prompt": [
-            {"role": "system", "content": [{"type": "text", "text": "System message"}]},
-            {"role": "user", "content": [{"type": "text", "text": "User prompt"}]}
-        ],
-        "answer": "Expected answer",
-        "reasoning": "Optional reasoning"
-    }
-    ```
-
     Attributes:
         whitespace_pattern (Pattern): Regular expression pattern for normalizing whitespace
 
@@ -69,10 +46,11 @@ class FormatConverter:
         This is the main conversion method that handles different processing modes:
         - language_modeling: Converts to ChatML format with messages field
         - prompt_only: Converts to prompt-only format with prompt, answer, reasoning fields
+        - preference: Converts to preference format with prompt, chosen, and rejected fields
 
         Args:
             dataset (DatasetDict): The input dataset with splits to convert
-            processing_mode (str): The processing mode ("language_modeling" or "prompt_only")
+            processing_mode (str): The processing mode ("language_modeling", "prompt_only", or "preference")
             config (Dict[str, Any]): Configuration for the conversion, including field_mappings
 
         Returns:
@@ -83,59 +61,57 @@ class FormatConverter:
             Exception: If there's an error during conversion
         """
         try:
-            if processing_mode == "language_modeling":
-                return self._convert_to_language_modeling(dataset, config)
-            elif processing_mode == "prompt_only":
-                return self._convert_to_prompt_only(dataset, config)
-            else:
+            # Map processing modes to their conversion functions and validation fields
+            mode_mapping = {
+                "language_modeling": {
+                    "converter": self._convert_single_example,
+                    "filter_key": "messages",
+                    "required_fields": ["user_field", "assistant_field"],
+                },
+                "prompt_only": {
+                    "converter": self._convert_single_example_prompt_only,
+                    "filter_key": "prompt",
+                    "required_fields": ["system_field", "user_field"],
+                },
+                "preference": {
+                    "converter": self._convert_single_example_preference,
+                    "filter_key": "prompt",
+                    "required_fields": ["user_field", "chosen_field", "rejected_field"],
+                },
+            }
+
+            if processing_mode not in mode_mapping:
                 raise ValueError(f"Unsupported processing mode: {processing_mode}")
+
+            return self._convert_dataset_generic(
+                dataset, config, mode_mapping[processing_mode]
+            )
+
         except Exception as e:
             logger.error(
                 f"Error converting dataset with mode {processing_mode}: {str(e)}"
             )
             raise
 
-    def _convert_to_language_modeling(
-        self, dataset: DatasetDict, config: Dict[str, Any]
+    def _convert_dataset_generic(
+        self, dataset: DatasetDict, config: Dict[str, Any], mode_config: Dict[str, Any]
     ) -> DatasetDict:
         """
-        Convert a dataset with splits to ChatML format.
-
-        This method converts each example in each split of the dataset to the ChatML format based on
-        the provided configuration. It handles field mapping, template formatting, and
-        ensures the output follows the ChatML structure for all splits.
+        Generic dataset conversion function that can be used for any processing mode.
 
         Args:
-            dataset (DatasetDict): The input dataset with splits to convert, where keys are split names
-                (e.g., 'train', 'test', 'validation') and values are lists of examples
-            config (Dict[str, Any]): Configuration for the conversion, including:
-                - field_mappings (Dict): Maps input fields to ChatML roles
+            dataset (DatasetDict): The input dataset with splits to convert
+            config (Dict[str, Any]): Configuration for the conversion, including field_mappings
+            mode_config (Dict[str, Any]): Mode-specific configuration containing:
+                - converter: The single example conversion function
+                - filter_key: The key to check in filtered results
+                - required_fields: List of required field mappings
 
         Returns:
-            DatasetDict: Dictionary with split names as keys and lists of examples in ChatML format as values,
-                where each example has:
-                - messages (List[Dict]): List of message objects with role and content
+            DatasetDict: Converted dataset in the appropriate format
 
         Raises:
             Exception: If there's an error during conversion
-
-        Example:
-            >>> config = {
-            ...     "field_mappings": {
-            ...         "user_field": {"type": "template", "value": "User: {question}"},
-            ...         "assistant_field": {"type": "column", "value": "answer"}
-            ...         "system_field": {"type": "template", "value": "You are a helpful assistant."}
-            ...     }
-            ... }
-            >>> dataset = DatasetDict({
-            ...     "train": Dataset.from_list([{"question": "What is ML?", "answer": "Machine Learning"}]),
-            ...     "test": Dataset.from_list([{"question": "What is AI?", "answer": "Artificial Intelligence"}])
-            ... })
-            >>> chatml_data = converter.convert_to_chatml(dataset, config)
-            >>> # Returns: {
-            ... #     "train": Dataset.from_list([{"messages": [{"role": "user", "content": "User: What is ML?"}, {"role": "assistant", "content": "Machine Learning"}]}]),
-            ... #     "test": Dataset.from_list([{"messages": [{"role": "user", "content": "User: What is AI?"}, {"role": "assistant", "content": "Artificial Intelligence"}]}]),
-            ... # }
         """
         try:
             if not dataset:
@@ -146,14 +122,16 @@ class FormatConverter:
             first_split = dataset[next(iter(dataset))]
             available_columns = set(first_split.column_names)
 
-            self._validate_field_mappings(field_mappings, available_columns)
+            self._validate_field_mappings(
+                field_mappings, available_columns, mode_config["required_fields"]
+            )
 
             # Check if we have any image fields in the configuration
             has_image_fields = self._has_image_fields(field_mappings)
             logger.info(f"Has image fields: {has_image_fields}")
 
             transformed_dataset = dataset.map(
-                self._convert_single_example,
+                mode_config["converter"],
                 fn_kwargs={
                     "field_mappings": field_mappings,
                     "is_multimodal": has_image_fields,
@@ -161,11 +139,13 @@ class FormatConverter:
                 batched=False,
                 remove_columns=dataset[next(iter(dataset))].column_names,
             )
+
             # Filter out failed conversions (empty dictionaries)
+            filter_key = mode_config["filter_key"]
             transformed_dataset = transformed_dataset.filter(
                 lambda x: isinstance(x, dict)
-                and "messages" in x
-                and len(x["messages"]) > 0
+                and filter_key in x
+                and len(x[filter_key]) > 0
             )
 
             logger.info(f"Converted dataset splits: {list(transformed_dataset.keys())}")
@@ -177,65 +157,7 @@ class FormatConverter:
             return transformed_dataset
 
         except Exception as e:
-            logger.error(f"Error converting to ChatML format: {str(e)}")
-            raise
-
-    def _convert_to_prompt_only(
-        self, dataset: DatasetDict, config: Dict[str, Any]
-    ) -> DatasetDict:
-        """
-        Convert dataset to prompt-only format for policy optimization training.
-
-        This format is used by trainers like GRPOTrainer that only need prompts
-        to generate their own responses for optimization.
-
-        Args:
-            dataset (DatasetDict): Input dataset
-            config (Dict[str, Any]): Configuration including field_mappings
-
-        Returns:
-            DatasetDict: Dataset in prompt-only format with prompt, answer, reasoning fields
-        """
-        try:
-            if not dataset:
-                raise ValueError("Dataset is empty")
-
-            # Validate field mappings refer to real columns
-            field_mappings = config.get("field_mappings", {})
-            first_split = dataset[next(iter(dataset))]
-            available_columns = set(first_split.column_names)
-
-            self._validate_field_mappings(field_mappings, available_columns)
-
-            # Check if we have any image fields in the configuration
-            has_image_fields = self._has_image_fields(field_mappings)
-            logger.info(f"Has image fields: {has_image_fields}")
-
-            transformed_dataset = dataset.map(
-                self._convert_single_example_prompt_only,
-                fn_kwargs={
-                    "field_mappings": field_mappings,
-                    "is_multimodal": has_image_fields,
-                },
-                batched=False,
-                remove_columns=dataset[next(iter(dataset))].column_names,
-            )
-
-            # Filter out failed conversions (empty dictionaries)
-            transformed_dataset = transformed_dataset.filter(
-                lambda x: isinstance(x, dict) and "prompt" in x and len(x["prompt"]) > 0
-            )
-
-            logger.info(f"Converted dataset splits: {list(transformed_dataset.keys())}")
-            for split_name, split_data in transformed_dataset.items():
-                logger.info(
-                    f"Converted split {split_name} has {len(split_data)} examples"
-                )
-
-            return transformed_dataset
-
-        except Exception as e:
-            logger.error(f"Error converting to prompt-only format: {str(e)}")
+            logger.error(f"Error converting dataset: {str(e)}")
             raise
 
     def _convert_single_example(
@@ -259,8 +181,18 @@ class FormatConverter:
 
         Returns:
             Dict: The converted example in ChatML format with messages field, or empty dict if conversion fails
+
+            The language modelling type follows this structure:
+            ```json
+            {
+                "messages": [
+                    {"role": "system", "content": [{"type": "text", "text": "System message"}]},
+                    {"role": "user", "content": [{"type": "text", "text": "User message"}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": "Assistant response"}]}
+                ]
+            }
+            ```
         """
-        # Simplified single-example conversion using helper methods
         try:
             messages: List[Dict[str, Any]] = []
 
@@ -322,6 +254,18 @@ class FormatConverter:
         Returns:
             Dict: The converted example in prompt-only format with prompt, and additional fields,
                   or empty dict if conversion fails
+
+            The prompt-only type follows this structure:
+            ```json
+            {
+                "prompt": [
+                    {"role": "system", "content": [{"type": "text", "text": "System message"}]},
+                    {"role": "user", "content": [{"type": "text", "text": "User prompt"}]}
+                ],
+                "answer": "Expected answer",
+                "reasoning": "Optional reasoning"
+            }
+            ```
         """
         try:
             prompt_messages: List[Dict[str, Any]] = []
@@ -359,6 +303,116 @@ class FormatConverter:
 
         except Exception as e:
             logger.error(f"Failed to convert single example to prompt-only: {e}")
+            logger.error(
+                f"Example keys: {list(example.keys()) if isinstance(example, dict) else 'Not a dict'}"
+            )
+            logger.error(f"Field mappings: {field_mappings}")
+            return {}
+
+    def _convert_single_example_preference(
+        self,
+        example: Dict,
+        field_mappings: Dict[str, Dict[str, Any]],
+        is_multimodal: bool = False,
+    ) -> Dict:
+        """
+        Convert a single example to preference format.
+
+        This method converts one example from the input format to preference format,
+        which includes a prompt field (list of messages), chosen response, and rejected response
+        used by preference-based trainers like DPOTrainer.
+
+        Args:
+            example (Dict): The input example to convert
+            field_mappings (Dict): Maps input fields with type and value:
+                - system_field: System message (optional)
+                - user_field: The main prompt content
+                - chosen_field: The preferred response
+                - rejected_field: The rejected response
+
+        Returns:
+            Dict: The converted example in preference format with prompt, chosen, and rejected fields,
+                  or empty dict if conversion fails
+
+        The preference type follows this structure:
+        ```json
+        {
+            "prompt": [
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": "What color is the sky?" },
+                        { "type": "image", "image": "<base64 or image object>" }
+                    ]
+                }
+            ],
+            "chosen": [
+                {
+                    "role": "assistant",
+                    "content": [{ "type": "text", "text": "It is blue." }]
+                }
+            ],
+            "rejected": [
+                {
+                    "role": "assistant",
+                    "content": [{ "type": "text", "text": "It is green." }]
+                }
+            ]
+        }
+        ```
+        """
+        try:
+            result = {}
+
+            # User message (contains the actual prompt + images if multimodal)
+            user_msg = self._create_user_message(
+                example, field_mappings, is_multimodal=is_multimodal
+            )
+
+            # The prompt field is required
+            if user_msg:
+                result["prompt"] = [user_msg]
+            else:
+                logger.warning("No prompt content found in example")
+                return {}
+
+            for field in ["chosen", "rejected"]:
+                field_config = field_mappings.get(f"{field}_field")
+                if not field_config:
+                    logging.warning(f"Field {field} not found in config!")
+                    result[field] = []
+
+                # Check for pre-formatted message first
+                if (
+                    field_config["type"] == "column"
+                    and field_config["value"] in example
+                ):
+                    content = example[field_config["value"]]
+                    pre_formatted = self._extract_pre_formatted_message(content)
+                    if pre_formatted:
+                        result[field] = [pre_formatted]
+                        continue
+
+                # Handle regular content
+                text_content = self._extract_text_content(
+                    example, field_mappings, f"{field}_field"
+                )
+
+                if text_content:
+                    result[field] = [
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": text_content}],
+                        }
+                    ]
+                else:
+                    result[field] = []
+                    logger.warning("No rejected response found in example")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to convert single example to preference: {e}")
             logger.error(
                 f"Example keys: {list(example.keys()) if isinstance(example, dict) else 'Not a dict'}"
             )
