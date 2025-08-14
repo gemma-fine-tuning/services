@@ -1,5 +1,11 @@
 from pydantic import BaseModel, field_validator
-from typing import Literal, Optional
+from typing import Literal, Optional, List
+
+
+class RewardConfig(BaseModel):
+    """Will be extended to support more"""
+
+    built_in_func: List[str]  # format, accuracy are built-in
 
 
 class HyperparameterConfig(BaseModel):
@@ -24,6 +30,18 @@ class HyperparameterConfig(BaseModel):
     lora_rank: Optional[int] = 16
     lora_alpha: Optional[int] = 16
     lora_dropout: Optional[float] = 0.05
+
+    # GRPO-specific hyperparameters
+    num_generations: Optional[int] = 4  # Number of generations for GRPO
+    max_prompt_length: Optional[int] = 256  # Max prompt length for GRPO
+    max_grad_norm: Optional[float] = 0.1  # Gradient clipping for GRPO
+    adam_beta1: Optional[float] = 0.9  # Adam beta1 for GRPO
+    adam_beta2: Optional[float] = 0.99  # Adam beta2 for GRPO
+    warmup_ratio: Optional[float] = 0.1  # Warmup ratio for GRPO
+
+    # DPO-specific hyperparameters
+    beta: Optional[float] = 0.1  # DPO regularization parameter
+    max_length: Optional[int] = 1024  # Max length for DPO
 
 
 class EvaluationConfig(BaseModel):
@@ -84,6 +102,9 @@ class TrainingConfig(BaseModel):
     # Optional configurations
     eval_config: Optional[EvaluationConfig] = None
     wandb_config: Optional[WandbConfig] = None
+
+    # GRPO-specific: reward functions configuration
+    reward_config: Optional[RewardConfig] = None
 
     @field_validator("trainer_type")
     @classmethod
