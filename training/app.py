@@ -165,8 +165,8 @@ async def start_training(
     job_id = make_job_id(processed_dataset_id, base_model_id, request)
 
     if (
-        request.export_config.destination == "hfhub"
-        and not request.export_config.hf_repo_id
+        request.training_config.export_config.destination == "hfhub"
+        and not request.training_config.export_config.hf_repo_id
     ):
         raise HTTPException(
             status_code=400,

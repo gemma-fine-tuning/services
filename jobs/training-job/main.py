@@ -110,7 +110,9 @@ def main():
             train_req = TrainRequest.model_validate(train_request)
             service = TrainingService.from_provider(train_req.training_config.provider)
             # We don't need to return anything because they are saved by the tracker internally to firestore already
-            _ = service.run_training(train_req, tracker)
+            _ = service.run_training(
+                train_req.processed_dataset_id, train_req.training_config, tracker
+            )
     except Exception as e:
         logging.error(f"Training job {job_id} failed: {str(e)}", exc_info=True)
         # Exception handling is done by JobTracker context manager
