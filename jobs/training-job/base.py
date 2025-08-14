@@ -36,11 +36,19 @@ class BaseTrainingService(ABC):
         report_to, wandb_url = self._setup_wandb(config.wandb_config, tracker.job_id)
 
         # 7. Build training arguments
-        training_args = self._build_training_args(config, tracker.job_id, report_to)
+        training_args = self._build_training_args(
+            config.trainer_type, config, tracker.job_id, report_to
+        )
 
         # 8. Instantiate trainer
         trainer = self._create_trainer(
-            model, tokenizer, train_dataset, eval_dataset, training_args, config
+            model,
+            tokenizer,
+            train_dataset,
+            eval_dataset,
+            training_args,
+            config.trainer_type,
+            config,
         )
 
         # 9. Train
@@ -77,7 +85,7 @@ class BaseTrainingService(ABC):
 
     @abstractmethod
     def _build_training_args(
-        self, cfg: TrainingConfig, job_id: str, report_to: str
+        self, trainer: str, cfg: TrainingConfig, job_id: str, report_to: str
     ) -> Any: ...
 
     @abstractmethod
@@ -88,6 +96,7 @@ class BaseTrainingService(ABC):
         train_ds: Any,
         eval_ds: Any,
         args: Any,
+        trainer: str,
         cfg: TrainingConfig,
     ) -> Any: ...
 
