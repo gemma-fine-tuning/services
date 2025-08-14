@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from datasets import DatasetDict
 import base64
 import io
@@ -39,7 +39,7 @@ class FormatConverter:
 
     def convert_to_conversational_chatml(
         self, dataset: DatasetDict, processing_mode: str, config: Dict[str, Any]
-    ) -> DatasetDict:
+    ) -> Tuple[DatasetDict, str]:
         """
         Convert a dataset to conversational format based on the processing mode.
 
@@ -55,6 +55,7 @@ class FormatConverter:
 
         Returns:
             DatasetDict: Converted dataset in the appropriate format
+            str: modality of the dataset
 
         Raises:
             ValueError: If processing_mode is not supported
@@ -62,21 +63,19 @@ class FormatConverter:
         """
         try:
             # Map processing modes to their conversion functions and validation fields
+            # required_fields are already validated by model validator for the config structure
             mode_mapping = {
                 "language_modeling": {
                     "converter": self._convert_single_example,
                     "filter_key": "messages",
-                    "required_fields": ["user_field", "assistant_field"],
                 },
                 "prompt_only": {
                     "converter": self._convert_single_example_prompt_only,
                     "filter_key": "prompt",
-                    "required_fields": ["system_field", "user_field"],
                 },
                 "preference": {
                     "converter": self._convert_single_example_preference,
                     "filter_key": "prompt",
-                    "required_fields": ["user_field", "chosen_field", "rejected_field"],
                 },
             }
 
@@ -95,7 +94,7 @@ class FormatConverter:
 
     def _convert_dataset_generic(
         self, dataset: DatasetDict, config: Dict[str, Any], mode_config: Dict[str, Any]
-    ) -> DatasetDict:
+    ) -> Tuple[DatasetDict, str]:
         """
         Generic dataset conversion function that can be used for any processing mode.
 
@@ -105,10 +104,10 @@ class FormatConverter:
             mode_config (Dict[str, Any]): Mode-specific configuration containing:
                 - converter: The single example conversion function
                 - filter_key: The key to check in filtered results
-                - required_fields: List of required field mappings
 
         Returns:
             DatasetDict: Converted dataset in the appropriate format
+            str: modality of the dataset
 
         Raises:
             Exception: If there's an error during conversion
@@ -122,13 +121,12 @@ class FormatConverter:
             first_split = dataset[next(iter(dataset))]
             available_columns = set(first_split.column_names)
 
-            self._validate_field_mappings(
-                field_mappings, available_columns, mode_config["required_fields"]
-            )
+            self._validate_field_mappings(field_mappings, available_columns)
 
             # Check if we have any image fields in the configuration
             has_image_fields = self._has_image_fields(field_mappings)
             logger.info(f"Has image fields: {has_image_fields}")
+            modality = "vision" if has_image_fields else "text"
 
             transformed_dataset = dataset.map(
                 mode_config["converter"],
@@ -154,7 +152,7 @@ class FormatConverter:
                     f"Converted split {split_name} has {len(split_data)} examples"
                 )
 
-            return transformed_dataset
+            return transformed_dataset, modality
 
         except Exception as e:
             logger.error(f"Error converting dataset: {str(e)}")
@@ -272,6 +270,7 @@ class FormatConverter:
             result = {}
 
             # System message for the prompt
+            # NOTE: since this is optional it will be ignored if not present
             sys_msg = self._create_system_message(example, field_mappings)
             if sys_msg:
                 prompt_messages.append(sys_msg)
@@ -381,6 +380,7 @@ class FormatConverter:
                 if not field_config:
                     logging.warning(f"Field {field} not found in config!")
                     result[field] = []
+                    continue
 
                 # Check for pre-formatted message first
                 if (
@@ -988,7 +988,9 @@ class FormatConverter:
 
     def _validate_messages(self, messages: List[Dict]) -> bool:
         """
-        Validate that we have the required messages for a valid conversation.
+        Validate that we have the required messages for a valid conversation for language modeling datastes.
+        It requires the message to have user and assistant fields.
+        NOTE: This is not applicable to any other dataset types.
 
         Args:
             messages (List[Dict]): List of message dictionaries

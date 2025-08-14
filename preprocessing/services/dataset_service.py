@@ -151,9 +151,11 @@ class DatasetService:
                 raise ValueError("Dataset is empty or could not be loaded")
 
             config_dict = config.model_dump()
-
-            processed_dataset = self.converter.convert_to_conversational_chatml(
-                dataset, processing_mode, config_dict
+            # the format converter will detect modality and return
+            processed_dataset, modality = (
+                self.converter.convert_to_conversational_chatml(
+                    dataset, processing_mode, config_dict
+                )
             )
 
             if not processed_dataset:
@@ -175,6 +177,7 @@ class DatasetService:
                     dataset_subset,
                     config,
                     dataset_source,
+                    modality,
                 )
             )
 
@@ -198,7 +201,10 @@ class DatasetService:
             return result
 
         except Exception as e:
+            import traceback
+
             logger.error(f"Error processing dataset: {str(e)}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise
 
     def get_datasets_info(self, user_id: str, dataset_tracker) -> DatasetsInfoResponse:

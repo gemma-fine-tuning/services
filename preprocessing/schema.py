@@ -87,7 +87,7 @@ class PreprocessingRequest(BaseModel):
         if self.processing_mode == ProcessingMode.LANGUAGE_MODELING:
             required_fields = ["user_field", "assistant_field"]
         elif self.processing_mode == ProcessingMode.PROMPT_ONLY:
-            required_fields = ["system_field", "user_field"]
+            required_fields = ["user_field"]
         elif self.processing_mode == ProcessingMode.PREFERENCE:
             required_fields = ["user_field", "chosen_field", "rejected_field"]
 
