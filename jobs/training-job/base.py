@@ -28,8 +28,8 @@ class BaseTrainingService(ABC):
         model = self._apply_peft_if_needed(model, config)
 
         # 5. Dataset preparation
-        train_dataset, eval_dataset = self._prepare_dataset(
-            train_ds, eval_ds, tokenizer, config.modality
+        train_dataset, eval_dataset = self._prepare_dataset_if_needed(
+            train_ds, eval_ds, tokenizer, config.modality, config.trainer_type
         )
 
         # 6. WandB initialization
@@ -76,8 +76,13 @@ class BaseTrainingService(ABC):
     def _setup_model(self, cfg: TrainingConfig) -> Tuple[Any, Any]: ...
 
     @abstractmethod
-    def _prepare_dataset(
-        self, train_ds: Any, eval_ds: Any, tokenizer: Any, modality: str
+    def _prepare_dataset_if_needed(
+        self,
+        train_ds: Any,
+        eval_ds: Any,
+        tokenizer: Any,
+        modality: str,
+        trainer_type: str,
     ) -> Tuple[Any, Any]: ...
 
     @abstractmethod
