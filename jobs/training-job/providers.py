@@ -88,6 +88,12 @@ def __build_shared_training_args(
             "adam_beta2": hyperparam.adam_beta2 or 0.99,
             "warmup_ratio": hyperparam.warmup_ratio or 0.1,
             "remove_unused_columns": False,  # MUST HAVE THIS to access the additional columns
+            # Being worked on by unsloth right now add: "vllm>=0.10.0" later
+            # GRPO is online method and vLLM is much faster at inference
+            # "use_vllm": True,
+            # NOTE: We cannot user "server" because there's only one GPU on cloud run for now...
+            # Otherwise we will start another vLLM inference server
+            # "vllm_mode": "colocate",
         }
         args = config_classes["grpo"](**trainer_args)
 
@@ -300,12 +306,19 @@ class HuggingFaceTrainingService(BaseTrainingService):
         self.DPOTrainer = DPOTrainer
         self.DPOConfig = DPOConfig
 
+        # Support both IT and PT models
+        # no official quantised so we apply them later with bnb
         self.supported_models = [
             "google/gemma-3-1b-it",
             "google/gemma-3-4b-it",
             "google/gemma-3-12b-it",
             "google/gemma-3n-E2B-it",
             "google/gemma-3n-E4B-it",
+            "google/gemma-3-1b-pt",
+            "google/gemma-3-4b-pt",
+            "google/gemma-3-12b-pt",
+            "google/gemma-3n-E2B",
+            "google/gemma-3n-E4B",
         ]
 
         # dtype based on GPU
@@ -647,6 +660,22 @@ class UnslothTrainingService(BaseTrainingService):
         self.DPOConfig = DPOConfig
         self.DPOTrainer = DPOTrainer
 
+        # Haven't tested 270M will add that later
+        self.supported_models = [
+            "unsloth/gemma-3-1b-it",
+            "unsloth/gemma-3-4b-it",
+            "unsloth/gemma-3-12b-it",
+            "unsloth/gemma-3-1b-pt",
+            "unsloth/gemma-3-4b-pt",
+            "unsloth/gemma-3-12b-pt",
+            "unsloth/gemma-3n-E4B-it",
+            "unsloth/gemma-3n-E2B-it",
+            "unsloth/gemma-3n-E4B",
+            "unsloth/gemma-3n-E2B",
+        ]
+
+        # unsloth dynamic 4bit quants, for bnb just load base
+        # should support QAT version of everything too haven't tested!
         self.fourbit_models = [
             "unsloth/gemma-3-1b-it-unsloth-bnb-4bit",
             "unsloth/gemma-3-4b-it-unsloth-bnb-4bit",
@@ -654,6 +683,12 @@ class UnslothTrainingService(BaseTrainingService):
             # "unsloth/gemma-3-27b-it-unsloth-bnb-4bit",
             "unsloth/gemma-3n-E4B-it-unsloth-bnb-4bit",
             "unsloth/gemma-3n-E2B-it-unsloth-bnb-4bit",
+            "unsloth/gemma-3-1b-pt-unsloth-bnb-4bit",
+            "unsloth/gemma-3-4b-pt-unsloth-bnb-4bit",
+            "unsloth/gemma-3-12b-pt-unsloth-bnb-4bit",
+            # "unsloth/gemma-3-27b-pt-unsloth-bnb-4bit",
+            "unsloth/gemma-3n-E4B-unsloth-bnb-4bit",
+            "unsloth/gemma-3n-E2B-unsloth-bnb-4bit",
         ]
 
     # Hooks for Template Method:
