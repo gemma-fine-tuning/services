@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional, Tuple
 
-from schema import TrainRequest, WandbConfig, TrainingConfig
+from schema import WandbConfig, TrainingConfig
 from utils import run_evaluation, save_and_track
 from job_manager import JobTracker
 
@@ -12,40 +12,35 @@ class BaseTrainingService(ABC):
     Defines the standard workflow; subclasses implement hooks below.
     """
 
-    def run_training(self, req: TrainRequest, tracker: JobTracker) -> Dict[str, Any]:
+    def run_training(
+        self, processed_dataset_id: str, config: TrainingConfig, tracker: JobTracker
+    ) -> Dict[str, Any]:
         # 1. Preparation
         tracker.preparing()
 
         # 2. Download datasets
-        train_ds, eval_ds = self._download_dataset(req.processed_dataset_id)
+        train_ds, eval_ds = self._download_dataset(processed_dataset_id)
 
         # 3. Model + tokenizer setup
-        model, tokenizer = self._setup_model(req.training_config)
+        model, tokenizer = self._setup_model(config)
 
-        # 4. Dataset preparation
+        # 4. Apply PEFT if needed on the model
+        model = self._apply_peft_if_needed(model, config)
+
+        # 5. Dataset preparation
         train_dataset, eval_dataset = self._prepare_dataset(
-            train_ds, eval_ds, tokenizer, req.training_config
+            train_ds, eval_ds, tokenizer, config.modality
         )
-
-        # 5. Optional PEFT wrapping
-        model = self._apply_peft_if_needed(model, req.training_config)
 
         # 6. WandB initialization
-        report_to, wandb_url = self._setup_wandb(req.wandb_config, tracker.job_id)
+        report_to, wandb_url = self._setup_wandb(config.wandb_config, tracker.job_id)
 
         # 7. Build training arguments
-        training_args = self._build_training_args(
-            req.training_config, tracker.job_id, report_to
-        )
+        training_args = self._build_training_args(config, tracker.job_id, report_to)
 
         # 8. Instantiate trainer
         trainer = self._create_trainer(
-            model,
-            tokenizer,
-            train_dataset,
-            eval_dataset,
-            training_args,
-            req.training_config,
+            model, tokenizer, train_dataset, eval_dataset, training_args, config
         )
 
         # 9. Train
@@ -56,7 +51,7 @@ class BaseTrainingService(ABC):
         metrics = self._evaluate_if_needed(trainer, eval_dataset)
 
         # 11. Save + record in tracker
-        artifact = self._save_and_track(model, tokenizer, tracker, metrics, req)
+        artifact = self._save_and_track(model, tokenizer, tracker, metrics, config)
 
         result = {
             "adapter_path": artifact.remote_path,
@@ -74,7 +69,7 @@ class BaseTrainingService(ABC):
 
     @abstractmethod
     def _prepare_dataset(
-        self, train_ds: Any, eval_ds: Any, tokenizer: Any, cfg: TrainingConfig
+        self, train_ds: Any, eval_ds: Any, tokenizer: Any, modality: str
     ) -> Tuple[Any, Any]: ...
 
     @abstractmethod
@@ -89,7 +84,7 @@ class BaseTrainingService(ABC):
     def _create_trainer(
         self,
         model: Any,
-        tokenizer: Any,
+        tokenizer_or_processor: Any,
         train_ds: Any,
         eval_ds: Any,
         args: Any,
@@ -108,15 +103,15 @@ class BaseTrainingService(ABC):
         tokenizer: Any,
         tracker: JobTracker,
         metrics: Optional[Dict[str, Any]],
-        req: TrainRequest,
+        train_config: TrainingConfig,
     ) -> Any:
         return save_and_track(
-            req.export_config,
+            train_config.export_config,
             model,
             tokenizer,
             tracker.job_id,
-            req.training_config.base_model_id,
-            req.training_config.provider,
+            train_config.base_model_id,
+            train_config.provider,
             tracker,
             metrics,
         )

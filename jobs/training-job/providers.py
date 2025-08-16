@@ -72,7 +72,8 @@ class HuggingFaceTrainingService(BaseTrainingService):
             "attn_implementation": "flash_attention_2" if cfg.use_fa2 else "eager",
         }
 
-        # Add quantization for QLoRA
+        # Load the model with proper quantisation if required
+        # NOTE: This can be easily extended to support other quantization methods
         if cfg.method == "QLoRA":
             model_kwargs["quantization_config"] = self.BitsAndBytesConfig(
                 load_in_4bit=True,
@@ -113,7 +114,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
             return model, tokenizer
 
     def _prepare_dataset(
-        self, train_ds: Any, eval_ds: Any, tokenizer: Any, cfg: TrainingConfig
+        self, train_ds: Any, eval_ds: Any, tokenizer: Any, modality: str
     ) -> Tuple[Any, Any]:
         # Format datasets for Trainer
         train = self._prepare_hf_dataset(train_ds, tokenizer)
@@ -127,14 +128,16 @@ class HuggingFaceTrainingService(BaseTrainingService):
     def _apply_peft_if_needed(self, model: Any, cfg: TrainingConfig) -> Any:
         if cfg.method != "Full":
             lora_config = self.LoraConfig(
-                lora_alpha=cfg.lora_alpha or 16,
-                lora_dropout=cfg.lora_dropout or 0.05,
-                r=cfg.lora_rank or 16,
+                lora_alpha=cfg.hyperparameters.lora_alpha,
+                lora_dropout=cfg.hyperparameters.lora_dropout,
+                r=cfg.hyperparameters.lora_rank,
                 bias="none",
                 target_modules="all-linear",
                 task_type="CAUSAL_LM",
                 modules_to_save=["lm_head", "embed_tokens"],
             )
+
+            # NOTE: This can be easily extended to support PEFT other than LoRA
 
             return self.get_peft_model(model, lora_config)
 
@@ -153,35 +156,39 @@ class HuggingFaceTrainingService(BaseTrainingService):
             bf16 = False
             fp16 = True
 
+        hyperparam = cfg.hyperparameters
+        evaluation = cfg.eval_config
+
         args = self.SFTConfig(
             output_dir=f"/tmp/{job_id}",
-            per_device_train_batch_size=cfg.batch_size,
-            per_device_eval_batch_size=cfg.batch_size,
-            gradient_accumulation_steps=cfg.gradient_accumulation_steps,
-            eval_accumulation_steps=cfg.gradient_accumulation_steps,
+            per_device_train_batch_size=hyperparam.batch_size,
+            gradient_accumulation_steps=hyperparam.gradient_accumulation_steps,
             warmup_steps=5,
-            num_train_epochs=cfg.epochs,
-            max_steps=cfg.max_steps or -1,
-            learning_rate=cfg.learning_rate,
-            packing=cfg.packing,
+            num_train_epochs=hyperparam.epochs,
+            max_steps=hyperparam.max_steps or -1,
+            learning_rate=hyperparam.learning_rate,
+            packing=hyperparam.packing,
             fp16=fp16,
             bf16=bf16,
-            fp16_full_eval=fp16,
-            bf16_full_eval=bf16,
             optim="adamw_torch_fused",
-            lr_scheduler_type=cfg.lr_scheduler_type or "linear",
+            lr_scheduler_type=hyperparam.lr_scheduler_type or "linear",
             weight_decay=0.01,
-            save_strategy=cfg.save_strategy or "epoch",
-            eval_strategy=cfg.eval_strategy or "no",
+            save_strategy=hyperparam.save_strategy or "epoch",
             push_to_hub=False,
-            logging_steps=cfg.logging_steps or 10,
+            logging_steps=hyperparam.logging_steps or 10,
             report_to=report_to,
-            batch_eval_metrics=cfg.batch_eval_metrics or False,
         )
 
-        # Add eval_steps if using steps strategy
-        if cfg.eval_strategy == "steps":
-            args.eval_steps = cfg.eval_steps or 50
+        # set eval related fields if present
+        if evaluation:
+            args.eval_strategy = evaluation.eval_strategy or "no"
+            if evaluation.eval_strategy == "steps":
+                args.eval_steps = evaluation.eval_steps
+            args.per_device_eval_batch_size = hyperparam.batch_size
+            args.eval_accumulation_steps = hyperparam.gradient_accumulation_steps
+            args.fp16_full_eval = fp16
+            args.bf16_full_eval = bf16
+            args.batch_eval_metrics = evaluation.batch_eval_metrics
 
         # Vision-specific arguments
         if cfg.modality == "vision":
@@ -196,7 +203,7 @@ class HuggingFaceTrainingService(BaseTrainingService):
     def _create_trainer(
         self,
         model: Any,
-        tokenizer: Any,
+        tokenizer_or_processor: Any,  # either AutoTokenizer or AutoProcessor
         train_ds: Any,
         eval_ds: Any,
         args: Any,
@@ -207,27 +214,36 @@ class HuggingFaceTrainingService(BaseTrainingService):
             args=args,
             train_dataset=train_ds,
             eval_dataset=eval_ds,
-            processing_class=tokenizer,
-            data_collator=self._create_vision_collate_fn(tokenizer)
+            processing_class=tokenizer_or_processor,
+            data_collator=self._create_vision_collate_fn(tokenizer_or_processor)
             if cfg.modality == "vision"
             else None,
             compute_metrics=create_compute_metrics(
-                cfg.compute_eval_metrics, cfg.batch_eval_metrics
-            ),
+                cfg.eval_config.compute_eval_metrics, cfg.eval_config.batch_eval_metrics
+            )
+            if cfg.eval_config
+            else None,
             # preprocess_logits_for_metrics=preprocess_logits_for_metrics
-            # if cfg.compute_eval_metrics
+            # if cfg.eval_config.compute_eval_metrics
             # else None,
         )
 
     def _create_vision_collate_fn(self, processor):
-        """Create vision collate function for HuggingFace vision training."""
+        """
+        Create vision collate function for HuggingFace vision training.
+        """
         from PIL import Image
 
         def vision_collate_fn(examples):
-            """Collate function for vision datasets that are already in ChatML format with images."""
+            """
+            Collate function for vision datasets that are already in ChatML format with images.
+            1. First apply chat template to all examples in this batch (converts from conversational to standard format)
+            2. Extract images from type:image fields and apply them to processors in the corret order
+            3. Do some postprocessing on the tokens and labels and return the batch with text and images
+            """
             texts = [
                 processor.apply_chat_template(
-                    example["messages"], tokenize=False, add_generation_prompt=False
+                    example["messages"], tokenize=True, add_generation_prompt=False
                 ).strip()
                 for example in examples
             ]
@@ -340,12 +356,6 @@ class UnslothTrainingService(BaseTrainingService):
             "unsloth/gemma-3n-E2B-it-unsloth-bnb-4bit",
         ]
 
-        self.torch_dtype = (
-            torch.bfloat16
-            if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8
-            else torch.float16
-        )
-
     # Hooks for Template Method:
     def _download_dataset(self, dataset_id: str) -> Tuple[Any, Any]:
         return storage_service.download_processed_dataset(dataset_id)
@@ -383,16 +393,15 @@ class UnslothTrainingService(BaseTrainingService):
                 max_seq_length=cfg.max_seq_length or 1024,
                 full_finetuning=True if cfg.method == "Full" else False,
             )
-            # model = self.prepare_model_for_kbit_training(model)
             # Setup chat template for text models
             tokenizer = self.get_chat_template(tokenizer, "gemma-3")
             return model, tokenizer
 
     def _prepare_dataset(
-        self, train_ds: Any, eval_ds: Any, tokenizer: Any, cfg: TrainingConfig
+        self, train_ds: Any, eval_ds: Any, tokenizer: Any, modality: str
     ) -> Tuple[Any, Any]:
         # Unsloth standardization for text; vision uses raw datasets
-        if cfg.modality != "vision":
+        if modality != "vision":
             train = self._prepare_unsloth_text_dataset(train_ds, tokenizer)
             eval = (
                 self._prepare_unsloth_text_dataset(eval_ds, tokenizer)
@@ -416,9 +425,9 @@ class UnslothTrainingService(BaseTrainingService):
                 finetune_language_layers=True,
                 finetune_attention_modules=True,
                 finetune_mlp_modules=True,
-                r=cfg.lora_rank,
-                lora_alpha=cfg.lora_alpha,
-                lora_dropout=cfg.lora_dropout,
+                r=cfg.hyperparameters.lora_rank,
+                lora_alpha=cfg.hyperparameters.lora_alpha,
+                lora_dropout=cfg.hyperparameters.lora_dropout,
                 bias="none",
                 random_state=3407,
                 use_rslora=False,
@@ -438,9 +447,9 @@ class UnslothTrainingService(BaseTrainingService):
                 #     "up_proj",
                 #     "down_proj",
                 # ],
-                r=cfg.lora_rank,
-                lora_alpha=cfg.lora_alpha,
-                lora_dropout=cfg.lora_dropout,
+                r=cfg.hyperparameters.lora_rank,
+                lora_alpha=cfg.hyperparameters.lora_alpha,
+                lora_dropout=cfg.hyperparameters.lora_dropout,
                 bias="none",
                 random_state=3407,
                 use_rslora=False,
@@ -454,35 +463,38 @@ class UnslothTrainingService(BaseTrainingService):
         self, cfg: TrainingConfig, job_id: str, report_to: str
     ) -> Any:
         # Build Unsloth training args
+        hyperparam = cfg.hyperparameters
+        evaluation = cfg.eval_config
+
         args = self.SFTConfig(
             output_dir=f"/tmp/{job_id}",
             dataset_text_field="text" if cfg.modality == "text" else "",
-            per_device_train_batch_size=cfg.batch_size,
-            per_device_eval_batch_size=cfg.batch_size,
-            gradient_accumulation_steps=cfg.gradient_accumulation_steps,
-            eval_accumulation_steps=cfg.gradient_accumulation_steps,
+            per_device_train_batch_size=hyperparam.batch_size,
+            gradient_accumulation_steps=hyperparam.gradient_accumulation_steps,
             warmup_steps=5,
-            num_train_epochs=cfg.epochs,
-            max_steps=cfg.max_steps or -1,
-            learning_rate=cfg.learning_rate,
-            packing=cfg.packing,
+            num_train_epochs=hyperparam.epochs,
+            max_steps=hyperparam.max_steps or -1,
+            learning_rate=hyperparam.learning_rate,
+            packing=hyperparam.packing,
             fp16=not self.is_bfloat16_supported(),
             bf16=self.is_bfloat16_supported(),
             fp16_full_eval=not self.is_bfloat16_supported(),
             bf16_full_eval=self.is_bfloat16_supported(),
             optim="adamw_8bit",  # Unsloth default
-            lr_scheduler_type=cfg.lr_scheduler_type or "linear",
+            lr_scheduler_type=hyperparam.lr_scheduler_type or "linear",
             weight_decay=0.01,
-            save_strategy=cfg.save_strategy or "epoch",
-            eval_strategy=cfg.eval_strategy or "no",
-            logging_steps=cfg.logging_steps or 10,
+            save_strategy=hyperparam.save_strategy or "epoch",
+            logging_steps=hyperparam.logging_steps or 10,
             report_to=report_to,
-            batch_eval_metrics=cfg.batch_eval_metrics or False,
         )
 
-        # Add eval_steps if using steps strategy
-        if cfg.eval_strategy == "steps":
-            args.eval_steps = cfg.eval_steps or 50
+        if evaluation:
+            args.eval_strategy = evaluation.eval_strategy or "no"
+            if evaluation.eval_strategy == "steps":
+                args.eval_steps = evaluation.eval_steps
+            args.per_device_eval_batch_size = hyperparam.batch_size
+            args.eval_accumulation_steps = hyperparam.gradient_accumulation_steps
+            args.batch_eval_metrics = evaluation.batch_eval_metrics
 
         # Add vision specific config
         if cfg.modality == "vision":
@@ -517,11 +529,10 @@ class UnslothTrainingService(BaseTrainingService):
                 else None
             ),
             compute_metrics=create_compute_metrics(
-                cfg.compute_eval_metrics, cfg.batch_eval_metrics
-            ),
-            # preprocess_logits_for_metrics=preprocess_logits_for_metrics
-            # if cfg.compute_eval_metrics
-            # else None,
+                cfg.eval_config.compute_eval_metrics, cfg.eval_config.batch_eval_metrics
+            )
+            if cfg.eval_config
+            else None,
         )
 
         # Apply response-only for text

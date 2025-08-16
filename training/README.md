@@ -18,6 +18,8 @@ gcloud builds submit --config cloudbuild.yaml --ignore-file=.gcloudignore
 
 ### POST `/train`
 
+> NOTE: You should definitely read through the [training job README](jobs/training-job/README.md) first to understand how the training job works and what configurations are required in the `training_config` field.
+
 Start a new training job.
 
 **Request:**
@@ -25,32 +27,44 @@ Start a new training job.
 ```json
 {
   "processed_dataset_id": "dataset_abc123",
-  "job_name": "My Training Job",
   "hf_token": "hf_...",
+  "job_name": "my-job-name",
   "training_config": {
-    "method": "LoRA" | "QLoRA" | "Full" | "RL",
     "base_model_id": "google/gemma-2b",
-    "learning_rate": 0.0001,
-    "batch_size": 4,
-    "epochs": 3,
-    "gradient_accumulation_steps": 4,
-    "provider": "unsloth" | "huggingface",
-    "modality": "text" | "vision",
-    "eval_strategy": "no" | "steps" | "epoch",
-    "eval_steps": 50,
-    "evaluation_metrics": true,
-    "batch_eval_metrics": false
-  },
-  "export_config": {
-    "format": "adapter" | "merged",
-    "destination": "gcs" | "hfhub",
-    "hf_repo_id": "user/model-name",
-    "include_gguf": false,
-    "gguf_quantization": "none" | "f16" | "bf16" | "q8_0" | "q4_k_m"
-  },
-  "wandb_config": {
-    "api_key": "wandb_...",
-    "project": "my-project"
+    "provider": "huggingface",
+    "method": "LoRA",
+    "trainer_type": "sft",
+    "modality": "text",
+    "hyperparameters": {
+      "learning_rate": 0.0001,
+      "batch_size": 4,
+      "gradient_accumulation_steps": 4,
+      "epochs": 3,
+      "max_steps": -1,
+      "packing": false,
+      "use_fa2": false,
+      "max_seq_length": 2048,
+      "lr_scheduler_type": "linear",
+      "save_strategy": "epoch",
+      "logging_steps": 10,
+      "lora_rank": 16,
+      "lora_alpha": 16,
+      "lora_dropout": 0.05
+    },
+    "export_config": {
+      "format": "merged",
+      "destination": "gcs",
+      "hf_repo_id": null,
+      "include_gguf": false,
+      "gguf_quantization": null
+    },
+    "eval_config": {
+      "eval_strategy": "epoch",
+      "eval_steps": 50,
+      "compute_eval_metrics": true,
+      "batch_eval_metrics": false
+    },
+    "wandb_config": null
   }
 }
 ```
@@ -145,33 +159,6 @@ Delete a training job and all associated files (at firestore and GCS).
 ### GET `/health`
 
 Health check endpoint.
-
-## Export Configuration
-
-The export configuration now supports:
-
-- **Primary Format**: Choose between `adapter` or `merged` model formats
-- **Optional GGUF**: Set `include_gguf: true` to also export a GGUF file alongside the primary model
-- **Separate Quantization**: Use `gguf_quantization` to specify different quantization for GGUF files
-
-### Example: Adapter with GGUF Export
-
-```json
-{
-  "export_config": {
-    "format": "adapter",
-    "quantization": "q4_k_m",
-    "destination": "gcs",
-    "include_gguf": true,
-    "gguf_quantization": "q8_0"
-  }
-}
-```
-
-This will export both:
-
-- Primary adapter model with q4_k_m quantization
-- GGUF file with q8_0 quantization
 
 ## Job Lifecycle
 

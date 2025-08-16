@@ -112,15 +112,16 @@ class DatasetService:
         dataset_name: str,
         dataset_source: Literal["upload", "huggingface"],
         dataset_id: str,
+        processing_mode: str,  # Changed from PreprocessingConfig
         config: PreprocessingConfig,
         dataset_subset: str = "default",
     ) -> ProcessingResult:
         """
-        Process a dataset to ChatML format.
+        Process a dataset to a conversational format based on the processing mode.
 
         This method performs the complete dataset processing pipeline:
         1. Loads the dataset from the specified source
-        2. Converts it to ChatML format
+        2. Converts it to a conversational format based on the mode
         3. Applies data augmentation if configured
         4. Validates the converted dataset
         5. Saves the processed dataset to storage
@@ -130,60 +131,17 @@ class DatasetService:
             dataset_name (str): The name of the dataset, used for the processed dataset name
             dataset_source (str): The source of the dataset
             dataset_id (str): The identifier for the dataset
-            config (PreprocessingConfig): Configuration for processing, including:
-                - field_mappings: Maps input fields to ChatML roles
-                - system_message: Default system message
-                - include_system: Whether to include system message
-                - user_template: Template for formatting user content
-                - train_test_split: Whether to split into train/test sets
-                - test_size: Size of test set (if splitting)
-                - augmentation_config: Configuration for data augmentation, including:
-                    - enabled: Whether to apply augmentation
-                    - use_eda: Whether to use Easy Data Augmentation
-                    - use_back_translation: Whether to use back translation
-                    - use_paraphrasing: Whether to use paraphrasing
-                    - use_synthesis: Whether to use AI synthesis
-                    - gemini_api_key: API key for Gemini (if using synthesis)
-                    - augmentation_factor: Factor to increase dataset size
-            sample_size (Optional[int]): Number of samples to process.
-                If None, processes the entire dataset.
+            processing_mode (str): The target format mode (e.g., 'language_modeling', 'grpo').
+            config (PreprocessingConfig): Configuration for processing, including field mappings.
+            dataset_subset (str): The subset of the dataset to use (for Hugging Face datasets).
 
         Returns:
             ProcessingResult: An object containing processing results and metadata
 
         Raises:
             Exception: If there's an error during processing
-
-        Example:
-            >>> config = PreprocessingConfig(
-            ...     field_mappings={
-            ...         "system_field": {"type": "template", "value": "You are a helpful assistant."},
-            ...         "user_field": {"type": "column", "value": "question"},
-            ...         "assistant_field": {"type": "template", "value": "Answer: {answer}"}
-            ...     },
-            ...     system_message="You are a helpful assistant.",
-            ...     train_test_split=True,
-            ...     test_size=0.2,
-            ...     augmentation_config={
-            ...         "enabled": True,
-            ...         "use_eda": True,
-            ...         "use_synthesis": True,
-            ...         "gemini_api_key": "your_api_key",
-            ...         "augmentation_factor": 1.5
-            ...     }
-            ... )
-            >>> result = service.process_dataset(
-            ...     "my_dataset",
-            ...     "upload",
-            ...     "my_dataset_id",
-            ...     config,
-            ...     split_config=HFSplitConfig(type="hf_split", splits=["train", "test"]),
-            ... )
         """
         try:
-            # Check if dataset name is already taken (we'll remove this check since we use unique IDs now)
-            # We can keep similar names as they will have different unique IDs
-
             # Load dataset with splits
             dataset = self.loader.load_dataset(
                 dataset_source, dataset_id, config, dataset_subset
@@ -193,8 +151,12 @@ class DatasetService:
                 raise ValueError("Dataset is empty or could not be loaded")
 
             config_dict = config.model_dump()
-
-            processed_dataset = self.converter.convert_to_chatml(dataset, config_dict)
+            # the format converter will detect modality and return
+            processed_dataset, modality = (
+                self.converter.convert_to_conversational_chatml(
+                    dataset, processing_mode, config_dict
+                )
+            )
 
             if not processed_dataset:
                 raise ValueError("No samples could be converted to ChatML format")
@@ -215,6 +177,7 @@ class DatasetService:
                     dataset_subset,
                     config,
                     dataset_source,
+                    modality,
                 )
             )
 
@@ -238,7 +201,10 @@ class DatasetService:
             return result
 
         except Exception as e:
+            import traceback
+
             logger.error(f"Error processing dataset: {str(e)}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise
 
     def get_datasets_info(self, user_id: str, dataset_tracker) -> DatasetsInfoResponse:

@@ -172,6 +172,7 @@ def process_dataset(
             dataset_source=request.dataset_source,
             dataset_id=request.dataset_id,
             dataset_subset=request.dataset_subset,
+            processing_mode=request.processing_mode,
             config=request.config,
         )
 

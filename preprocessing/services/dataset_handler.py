@@ -180,6 +180,7 @@ class DatasetHandler:
         dataset_subset: str,
         config: PreprocessingConfig,
         dataset_source: str,
+        modality: str,
     ) -> tuple[str, str, dict]:
         """
         Upload a processed dataset to storage with a unique identifier.
@@ -191,6 +192,7 @@ class DatasetHandler:
             dataset_subset (str): Subset of the dataset
             config (PreprocessingConfig): Configuration used for processing
             dataset_source (str): Source of the dataset ("upload" or "huggingface")
+            modality (str): Modality of the dataset ("text" or "vision")
 
         Returns:
             tuple[str, str, dict]: A tuple containing (dataset_path, processed_dataset_id, metadata)
@@ -211,12 +213,6 @@ class DatasetHandler:
         # Generate unique ID for processed dataset (8-character UUID hex)
         processed_dataset_id = str(uuid.uuid4()).replace("-", "")[:8]
 
-        # Automatically determine modality: 'vision' if any image field mappings, else 'text'
-        modality = (
-            "vision"
-            if any(fm.type == "image" for fm in config.field_mappings.values())
-            else "text"
-        )
         metadata = {
             "splits": [],
             "dataset_name": dataset_name,
