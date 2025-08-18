@@ -74,20 +74,26 @@ def __build_shared_training_args(
 
     elif trainer_type == "grpo":
         # GRPO-specific parameters
-        max_prompt_length = hyperparam.max_prompt_length or 256
-        max_seq_length = hyperparam.max_seq_length or 1024
+        max_prompt_length = hyperparam.max_prompt_length
+        max_length = hyperparam.max_seq_length
+        max_completion_length = max_length - max_prompt_length
+
+        # This makes sure the entire image token is sent for vision
+        if cfg.modality == "vision":
+            max_prompt_length = None
+            max_completion_length = max_length
 
         trainer_args = {
             **base_args,
             "max_steps": hyperparam.max_steps or 50,
             "num_generations": hyperparam.num_generations or 4,
             "max_prompt_length": max_prompt_length,
-            "max_completion_length": max_seq_length - max_prompt_length,
+            "max_completion_length": max_completion_length,
             "max_grad_norm": hyperparam.max_grad_norm or 0.1,
             "adam_beta1": hyperparam.adam_beta1 or 0.9,
             "adam_beta2": hyperparam.adam_beta2 or 0.99,
             "warmup_ratio": hyperparam.warmup_ratio or 0.1,
-            "remove_unused_columns": False,  # MUST HAVE THIS to access the additional columns
+            "remove_unused_columns": False,  # NOTE: MUST HAVE THIS to access the additional columns
             # Being worked on by unsloth right now add: "vllm>=0.10.0" later
             # GRPO is online method and vLLM is much faster at inference
             # "use_vllm": True,
@@ -103,8 +109,11 @@ def __build_shared_training_args(
             "num_train_epochs": hyperparam.epochs,
             "max_steps": hyperparam.max_steps or -1,
             "beta": hyperparam.beta or 0.1,
-            "max_prompt_length": hyperparam.max_prompt_length or 512,
-            "max_length": hyperparam.max_length or 1024,
+            "max_prompt_length": hyperparam.max_prompt_length
+            if cfg.modality != "vision"
+            else None,
+            # max_length is max_completion_length + max_prompt_length
+            "max_length": hyperparam.max_length,
         }
         args = config_classes["dpo"](**trainer_args)
 
@@ -725,7 +734,7 @@ class UnslothTrainingService(BaseTrainingService):
             model, tokenizer = self.FastModel.from_pretrained(
                 base_model_id,
                 load_in_4bit=True,
-                max_seq_length=cfg.max_seq_length or 1024,
+                max_seq_length=cfg.max_seq_length,
                 full_finetuning=True if cfg.method == "Full" else False,
             )
             # Setup chat template for text models

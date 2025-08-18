@@ -31,9 +31,12 @@ class HyperparameterConfig(BaseModel):
     lora_alpha: Optional[int] = 16
     lora_dropout: Optional[float] = 0.05
 
-    # GRPO-specific hyperparameters
+    # GRPO DPO shared
+    max_prompt_length: Optional[int] = 512  # Max prompt length
+    max_length: Optional[int] = 1024  # Max length for DPO
+
+    # GRPO-specific hyperparameters (some are shard with DPO)
     num_generations: Optional[int] = 4  # Number of generations for GRPO
-    max_prompt_length: Optional[int] = 256  # Max prompt length for GRPO
     max_grad_norm: Optional[float] = 0.1  # Gradient clipping for GRPO
     adam_beta1: Optional[float] = 0.9  # Adam beta1 for GRPO
     adam_beta2: Optional[float] = 0.99  # Adam beta2 for GRPO
@@ -41,7 +44,6 @@ class HyperparameterConfig(BaseModel):
 
     # DPO-specific hyperparameters
     beta: Optional[float] = 0.1  # DPO regularization parameter
-    max_length: Optional[int] = 1024  # Max length for DPO
 
 
 class EvaluationConfig(BaseModel):
