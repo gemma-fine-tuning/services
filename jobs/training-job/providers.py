@@ -318,16 +318,18 @@ class HuggingFaceTrainingService(BaseTrainingService):
         # Support both IT and PT models
         # no official quantised so we apply them later with bnb
         self.supported_models = [
-            "google/gemma-3-1b-it",
-            "google/gemma-3-4b-it",
-            "google/gemma-3-12b-it",
-            "google/gemma-3n-E2B-it",
-            "google/gemma-3n-E4B-it",
             "google/gemma-3-1b-pt",
+            "google/gemma-3-1b-it",
             "google/gemma-3-4b-pt",
+            "google/gemma-3-4b-it",
             "google/gemma-3-12b-pt",
+            "google/gemma-3-12b-it",
             "google/gemma-3n-E2B",
+            "google/gemma-3n-E2B-it",
             "google/gemma-3n-E4B",
+            "google/gemma-3n-E4B-it",
+            "google/gemma-3-270m",
+            "google/gemma-3-270m-it",
         ]
 
         # dtype based on GPU
@@ -671,33 +673,32 @@ class UnslothTrainingService(BaseTrainingService):
 
         # Haven't tested 270M will add that later
         self.supported_models = [
-            "unsloth/gemma-3-1b-it",
-            "unsloth/gemma-3-4b-it",
-            "unsloth/gemma-3-12b-it",
             "unsloth/gemma-3-1b-pt",
+            "unsloth/gemma-3-1b-it",
             "unsloth/gemma-3-4b-pt",
+            "unsloth/gemma-3-4b-it",
             "unsloth/gemma-3-12b-pt",
-            "unsloth/gemma-3n-E4B-it",
-            "unsloth/gemma-3n-E2B-it",
+            "unsloth/gemma-3-12b-it",
             "unsloth/gemma-3n-E4B",
+            "unsloth/gemma-3n-E4B-it",
             "unsloth/gemma-3n-E2B",
-        ]
-
-        # unsloth dynamic 4bit quants, for bnb just load base
-        # should support QAT version of everything too haven't tested!
-        self.fourbit_models = [
-            "unsloth/gemma-3-1b-it-unsloth-bnb-4bit",
-            "unsloth/gemma-3-4b-it-unsloth-bnb-4bit",
-            "unsloth/gemma-3-12b-it-unsloth-bnb-4bit",
-            # "unsloth/gemma-3-27b-it-unsloth-bnb-4bit",
-            "unsloth/gemma-3n-E4B-it-unsloth-bnb-4bit",
-            "unsloth/gemma-3n-E2B-it-unsloth-bnb-4bit",
+            "unsloth/gemma-3n-E2B-it",
+            # Can't find 240m pt with unsloth
+            "unsloth/gemma-3-270m-it",
             "unsloth/gemma-3-1b-pt-unsloth-bnb-4bit",
+            "unsloth/gemma-3-1b-it-unsloth-bnb-4bit",
             "unsloth/gemma-3-4b-pt-unsloth-bnb-4bit",
+            "unsloth/gemma-3-4b-it-unsloth-bnb-4bit",
             "unsloth/gemma-3-12b-pt-unsloth-bnb-4bit",
+            "unsloth/gemma-3-12b-it-unsloth-bnb-4bit",
             # "unsloth/gemma-3-27b-pt-unsloth-bnb-4bit",
+            # "unsloth/gemma-3-27b-it-unsloth-bnb-4bit",
             "unsloth/gemma-3n-E4B-unsloth-bnb-4bit",
+            "unsloth/gemma-3n-E4B-it-unsloth-bnb-4bit",
             "unsloth/gemma-3n-E2B-unsloth-bnb-4bit",
+            "unsloth/gemma-3n-E2B-it-unsloth-bnb-4bit",
+            # "unsloth/gemma-3-240m-pt-unsloth-bnb-4bit",  # No PT version
+            "unsloth/gemma-3-270m-it-unsloth-bnb-4bit",
         ]
 
     # Hooks for Template Method:
@@ -706,10 +707,10 @@ class UnslothTrainingService(BaseTrainingService):
 
     def _setup_model(self, cfg: TrainingConfig) -> Tuple[Any, Any]:
         base_model_id = cfg.base_model_id or "unsloth/gemma-3-1b-it-unsloth-bnb-4bit"
-        if base_model_id not in self.fourbit_models:
+        if base_model_id not in self.supported_models:
             raise ValueError(
                 f"Unsupported base model {base_model_id}. "
-                f"Supported models: {self.fourbit_models}"
+                f"Supported models: {self.supported_models}"
             )
 
         # Choose Unsloth model based on modality
