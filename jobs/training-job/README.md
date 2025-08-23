@@ -140,6 +140,12 @@ Configure evaluation during training:
 - **wandb**: Provide your wandb API key and other variables to set up cloud logging
 - **streaming logs**: Stream logs to frontend or a CLI whatever toolkit (NOT SUPPORTED, PLANNED)
 
+### Reward Functions (for GRPO)
+
+- **builtin reward functions**: Use built-in reward functions like formatting, accuracy, etc.
+
+- **custom reward functions**: Provide custom reward functions as Python code (not supported yet)
+
 ## Example Training Config
 
 I will update this later...
